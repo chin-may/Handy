@@ -442,6 +442,8 @@
       "loading": "加载历史记录中...",
       "empty": "还没有转录记录。开始录制以建立您的历史记录！",
       "copyToClipboard": "复制转录到剪贴板",
+      "originalText": "原始文本",
+      "aiCleanedText": "AI 清理后",
       "save": "保存转录",
       "unsave": "从已保存中移除",
       "delete": "删除条目",

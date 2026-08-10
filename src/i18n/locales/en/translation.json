@@ -442,6 +442,8 @@
       "loading": "Loading history...",
       "empty": "No transcriptions yet. Start recording to build your history!",
       "copyToClipboard": "Copy transcription to clipboard",
+      "originalText": "Original",
+      "aiCleanedText": "AI cleaned",
       "save": "Save transcription",
       "unsave": "Remove from saved",
       "delete": "Delete entry",

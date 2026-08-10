@@ -14,6 +14,7 @@ import { useOsType } from "@/hooks/useOsType";
 import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer, AudioPlayerGroup } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
+import { getHistoryTextSections } from "./historyTextSections";
 
 const IconButton: React.FC<{
   onClick: () => void;
@@ -258,7 +259,7 @@ export const HistorySettings: React.FC = () => {
                 key={entry.id}
                 entry={entry}
                 onToggleSaved={() => toggleSaved(entry.id)}
-                onCopyText={() => copyToClipboard(entry.transcription_text)}
+                onCopyText={copyToClipboard}
                 getAudioUrl={getAudioUrl}
                 deleteAudio={deleteAudioEntry}
                 retryTranscription={retryHistoryEntry}
@@ -297,7 +298,7 @@ export const HistorySettings: React.FC = () => {
 interface HistoryEntryProps {
   entry: HistoryEntry;
   onToggleSaved: () => void;
-  onCopyText: () => void;
+  onCopyText: (text: string) => Promise<void>;
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
   retryTranscription: (id: number) => Promise<void>;
@@ -312,24 +313,29 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   retryTranscription,
 }) => {
   const { t, i18n } = useTranslation();
-  const [showCopied, setShowCopied] = useState(false);
+  const [copiedSection, setCopiedSection] = useState<
+    "original" | "cleaned" | null
+  >(null);
   const [retrying, setRetrying] = useState(false);
 
   const hasTranscription = entry.transcription_text.trim().length > 0;
+  const hasPostProcessedText = entry.post_processed_text !== null;
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
     [getAudioUrl, entry.file_name],
   );
 
-  const handleCopyText = () => {
-    if (!hasTranscription) {
+  const textSections = getHistoryTextSections(entry);
+
+  const handleCopyText = (section: "original" | "cleaned", text: string) => {
+    if (!text.trim()) {
       return;
     }
 
-    onCopyText();
-    setShowCopied(true);
-    setTimeout(() => setShowCopied(false), 2000);
+    void onCopyText(text);
+    setCopiedSection(section);
+    setTimeout(() => setCopiedSection(null), 2000);
   };
 
   const handleDeleteEntry = async () => {
@@ -360,17 +366,21 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
       <div className="flex justify-between items-center">
         <p className="text-sm font-medium">{formattedDate}</p>
         <div className="flex items-center">
-          <IconButton
-            onClick={handleCopyText}
-            disabled={!hasTranscription || retrying}
-            title={t("settings.history.copyToClipboard")}
-          >
-            {showCopied ? (
-              <Check width={16} height={16} />
-            ) : (
-              <Copy width={16} height={16} />
-            )}
-          </IconButton>
+          {!hasPostProcessedText && (
+            <IconButton
+              onClick={() =>
+                handleCopyText("original", entry.transcription_text)
+              }
+              disabled={!hasTranscription || retrying}
+              title={t("settings.history.copyToClipboard")}
+            >
+              {copiedSection === "original" ? (
+                <Check width={16} height={16} />
+              ) : (
+                <Copy width={16} height={16} />
+              )}
+            </IconButton>
+          )}
           <IconButton
             onClick={onToggleSaved}
             disabled={retrying}
@@ -412,34 +422,54 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         </div>
       </div>
 
-      <p
-        className={`italic text-sm pb-2 ${
-          retrying
-            ? ""
-            : hasTranscription
-              ? "text-text/90 select-text cursor-text whitespace-pre-wrap break-words"
-              : "text-text/40"
-        }`}
-        style={
-          retrying
-            ? { animation: "transcribe-pulse 3s ease-in-out infinite" }
-            : undefined
-        }
-      >
-        {retrying && (
+      {retrying ? (
+        <p
+          className="italic text-sm pb-2"
+          style={{ animation: "transcribe-pulse 3s ease-in-out infinite" }}
+        >
           <style>{`
             @keyframes transcribe-pulse {
               0%, 100% { color: color-mix(in srgb, var(--color-text) 40%, transparent); }
               50% { color: color-mix(in srgb, var(--color-text) 90%, transparent); }
             }
           `}</style>
-        )}
-        {retrying
-          ? t("settings.history.transcribing")
-          : hasTranscription
-            ? entry.transcription_text
-            : t("settings.history.transcriptionFailed")}
-      </p>
+          {t("settings.history.transcribing")}
+        </p>
+      ) : hasTranscription && !hasPostProcessedText ? (
+        <p className="italic text-sm pb-2 text-text/90 select-text cursor-text whitespace-pre-wrap break-words">
+          {entry.transcription_text}
+        </p>
+      ) : hasTranscription ? (
+        <div className="space-y-3 pb-2">
+          {textSections.map((section) => (
+            <section key={section.id} className="space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
+                  {t(section.translationKey)}
+                </h3>
+                <IconButton
+                  onClick={() => handleCopyText(section.id, section.text)}
+                  disabled={!section.text.trim()}
+                  title={t("settings.history.copyToClipboard")}
+                >
+                  {copiedSection === section.id ? (
+                    <Check width={16} height={16} />
+                  ) : (
+                    <Copy width={16} height={16} />
+                  )}
+                </IconButton>
+              </div>
+              <p className="italic text-sm text-text/90 select-text cursor-text whitespace-pre-wrap break-words">
+                {section.text}
+              </p>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <p className="italic text-sm pb-2 text-text/40">
+          {t("settings.history.transcriptionFailed")}
+        </p>
+      )}
 
       <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
     </div>

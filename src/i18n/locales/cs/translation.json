@@ -442,6 +442,8 @@
       "loading": "Načítám historii...",
       "empty": "Zatím žádné přepisy. Začněte nahrávat a vytvořte si historii!",
       "copyToClipboard": "Kopírovat přepis do schránky",
+      "originalText": "Původní text",
+      "aiCleanedText": "Vyčištěno umělou inteligencí",
       "save": "Uložit přepis",
       "unsave": "Odebrat z uložených",
       "delete": "Smazat záznam",
