@@ -111,6 +111,7 @@
         "description": "Cần thiết để nhập văn bản đã chuyển đổi vào các ứng dụng của bạn."
       },
       "grant": "Cấp quyền",
+      "recheck": "Kiểm tra lại",
       "granted": "Đã cấp",
       "waiting": "Đang chờ...",
       "allGranted": "Hoàn tất!",
@@ -217,6 +218,15 @@
       "pushToTalk": {
         "label": "Nhấn để nói",
         "description": "Giữ để ghi âm, thả để dừng"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "sound": {

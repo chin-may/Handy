@@ -18,8 +18,7 @@ use crate::TranscriptionCoordinator;
 /// This function contains the shared logic for:
 /// - Looking up the action in ACTION_MAP
 /// - Handling the cancel binding (only fires when recording)
-/// - Handling push-to-talk mode (start on press, stop on release)
-/// - Handling toggle mode (toggle state on press only)
+/// - Handling recording modes in the coordinator
 ///
 /// # Arguments
 /// * `app` - The Tauri app handle
@@ -37,7 +36,12 @@ pub fn handle_shortcut_event(
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
-            coordinator.send_input(binding_id, hotkey_string, is_pressed, settings.push_to_talk);
+            coordinator.send_input(
+                binding_id,
+                hotkey_string,
+                is_pressed,
+                settings.recording_mode,
+            );
         } else {
             warn!("TranscriptionCoordinator is not initialized");
         }

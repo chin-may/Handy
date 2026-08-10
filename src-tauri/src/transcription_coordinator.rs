@@ -1,5 +1,6 @@
 use crate::actions::ACTION_MAP;
 use crate::managers::audio::AudioRecordingManager;
+use crate::settings::RecordingMode;
 use log::{debug, error, warn};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -9,6 +10,8 @@ use tauri::{AppHandle, Manager};
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const RELEASE_GRACE: Duration = Duration::from_millis(50);
+/// A release at this threshold is a held recording; shorter releases latch.
+const TAP_OR_HOLD_THRESHOLD: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PttAction {
@@ -21,6 +24,9 @@ struct PendingRelease {
     binding_id: String,
     hotkey_string: String,
     deadline: Instant,
+    recording_mode: RecordingMode,
+    press_started_at: Instant,
+    released_at: Instant,
 }
 
 /// Commands processed sequentially by the coordinator thread.
@@ -29,29 +35,33 @@ enum Command {
         binding_id: String,
         hotkey_string: String,
         is_pressed: bool,
-        push_to_talk: bool,
+        recording_mode: RecordingMode,
     },
     Cancel {
         recording_was_active: bool,
     },
+    ShortcutsSuspended,
     ProcessingFinished,
 }
 
 /// Pipeline lifecycle, owned exclusively by the coordinator thread.
 enum Stage {
     Idle,
-    Recording(String), // binding_id
+    Recording {
+        binding_id: String,
+        recording_mode: RecordingMode,
+    },
     Processing,
 }
 
-fn classify_ptt_event(
+fn classify_release_event(
     pending_release_binding: Option<&str>,
     is_pressed: bool,
-    push_to_talk: bool,
+    recording_mode: RecordingMode,
     binding_id: &str,
     recording_binding: Option<&str>,
 ) -> PttAction {
-    if !push_to_talk {
+    if recording_mode == RecordingMode::Toggle {
         return PttAction::Passthrough;
     }
 
@@ -65,6 +75,21 @@ fn classify_ptt_event(
         PttAction::DeferRelease
     } else {
         PttAction::Passthrough
+    }
+}
+
+fn is_short_tap(press_started_at: Instant, released_at: Instant) -> bool {
+    released_at.duration_since(press_started_at) < TAP_OR_HOLD_THRESHOLD
+}
+
+fn effective_recording_mode(
+    input_mode: RecordingMode,
+    active_recording_mode: Option<RecordingMode>,
+) -> RecordingMode {
+    if input_mode == RecordingMode::Toggle {
+        RecordingMode::Toggle
+    } else {
+        active_recording_mode.unwrap_or(input_mode)
     }
 }
 
@@ -88,6 +113,9 @@ impl TranscriptionCoordinator {
                 let mut stage = Stage::Idle;
                 let mut last_press: Option<Instant> = None;
                 let mut pending_release: Option<PendingRelease> = None;
+                let mut hybrid_press_started: Option<(String, Instant)> = None;
+                let mut latched_binding: Option<String> = None;
+                let mut consumed_release_binding: Option<String> = None;
 
                 loop {
                     let cmd = if let Some(pending) = &pending_release {
@@ -97,15 +125,38 @@ impl TranscriptionCoordinator {
                             Ok(cmd) => cmd,
                             Err(mpsc::RecvTimeoutError::Timeout) => {
                                 if let Some(pending) = pending_release.take() {
-                                    if matches!(&stage, Stage::Recording(id) if id == &pending.binding_id)
+                                    if matches!(&stage, Stage::Recording { binding_id, .. } if binding_id == &pending.binding_id)
                                     {
-                                        stop(
-                                            &app,
-                                            &mut stage,
-                                            &pending.binding_id,
-                                            &pending.hotkey_string,
-                                        );
+                                        match pending.recording_mode {
+                                            RecordingMode::PushToTalk => stop(
+                                                &app,
+                                                &mut stage,
+                                                &pending.binding_id,
+                                                &pending.hotkey_string,
+                                            ),
+                                            RecordingMode::TapOrHold => {
+                                                if is_short_tap(
+                                                    pending.press_started_at,
+                                                    pending.released_at,
+                                                ) {
+                                                    debug!(
+                                                        "Latched recording for '{}' after a short tap",
+                                                        pending.binding_id
+                                                    );
+                                                    latched_binding = Some(pending.binding_id);
+                                                } else {
+                                                    stop(
+                                                        &app,
+                                                        &mut stage,
+                                                        &pending.binding_id,
+                                                        &pending.hotkey_string,
+                                                    );
+                                                }
+                                            }
+                                            RecordingMode::Toggle => {}
+                                        }
                                     }
+                                    hybrid_press_started = None;
                                 }
                                 continue;
                             }
@@ -123,20 +174,40 @@ impl TranscriptionCoordinator {
                             binding_id,
                             hotkey_string,
                             is_pressed,
-                            push_to_talk,
+                            recording_mode,
                         } => {
+                            if !is_pressed
+                                && consumed_release_binding.as_deref() == Some(&binding_id)
+                            {
+                                consumed_release_binding = None;
+                                continue;
+                            }
+
                             let pending_release_binding = pending_release
                                 .as_ref()
                                 .map(|pending| pending.binding_id.as_str());
                             let recording_binding = match &stage {
-                                Stage::Recording(id) => Some(id.as_str()),
+                                Stage::Recording { binding_id, .. } => Some(binding_id.as_str()),
                                 _ => None,
                             };
+                            // CLI and signal inputs are explicitly submitted as
+                            // Toggle mode. Preserve their legacy press-only
+                            // behavior even if a keyboard-held recording was
+                            // started under another mode.
+                            let active_mode = effective_recording_mode(
+                                recording_mode,
+                                match &stage {
+                                    Stage::Recording { recording_mode, .. } => {
+                                        Some(*recording_mode)
+                                    }
+                                    _ => None,
+                                },
+                            );
 
-                            match classify_ptt_event(
+                            match classify_release_event(
                                 pending_release_binding,
                                 is_pressed,
-                                push_to_talk,
+                                active_mode,
                                 &binding_id,
                                 recording_binding,
                             ) {
@@ -145,10 +216,19 @@ impl TranscriptionCoordinator {
                                     continue;
                                 }
                                 PttAction::DeferRelease => {
+                                    let now = Instant::now();
+                                    let press_started_at = hybrid_press_started
+                                        .as_ref()
+                                        .filter(|(id, _)| id == &binding_id)
+                                        .map(|(_, started)| *started)
+                                        .unwrap_or(now);
                                     pending_release = Some(PendingRelease {
                                         binding_id,
                                         hotkey_string,
-                                        deadline: Instant::now() + RELEASE_GRACE,
+                                        deadline: now + RELEASE_GRACE,
+                                        recording_mode: active_mode,
+                                        press_started_at,
+                                        released_at: now,
                                     });
                                     continue;
                                 }
@@ -166,25 +246,64 @@ impl TranscriptionCoordinator {
                                 last_press = Some(now);
                             }
 
-                            if push_to_talk {
+                            if active_mode == RecordingMode::PushToTalk {
                                 if is_pressed && matches!(stage, Stage::Idle) {
-                                    start(&app, &mut stage, &binding_id, &hotkey_string);
-                                } else if !is_pressed
-                                    && matches!(&stage, Stage::Recording(id) if id == &binding_id)
-                                {
-                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    start(
+                                        &app,
+                                        &mut stage,
+                                        &binding_id,
+                                        &hotkey_string,
+                                        active_mode,
+                                    );
                                 }
-                            } else if is_pressed {
+                            } else if active_mode == RecordingMode::TapOrHold && is_pressed {
                                 match &stage {
                                     Stage::Idle => {
-                                        start(&app, &mut stage, &binding_id, &hotkey_string);
+                                        let pressed_at = Instant::now();
+                                        start(
+                                            &app,
+                                            &mut stage,
+                                            &binding_id,
+                                            &hotkey_string,
+                                            active_mode,
+                                        );
+                                        if matches!(&stage, Stage::Recording { binding_id: id, .. } if id == &binding_id)
+                                        {
+                                            hybrid_press_started = Some((binding_id, pressed_at));
+                                        } else {
+                                            hybrid_press_started = None;
+                                            latched_binding = None;
+                                        }
                                     }
-                                    Stage::Recording(id) if id == &binding_id => {
+                                    Stage::Recording { binding_id: id, .. }
+                                        if id == &binding_id
+                                            && latched_binding.as_deref() == Some(&binding_id) =>
+                                    {
+                                        pending_release = None;
+                                        hybrid_press_started = None;
+                                        latched_binding = None;
+                                        consumed_release_binding = Some(binding_id.clone());
                                         stop(&app, &mut stage, &binding_id, &hotkey_string);
                                     }
                                     _ => {
                                         debug!("Ignoring press for '{binding_id}': pipeline busy")
                                     }
+                                }
+                            } else if active_mode == RecordingMode::Toggle && is_pressed {
+                                match &stage {
+                                    Stage::Idle => start(
+                                        &app,
+                                        &mut stage,
+                                        &binding_id,
+                                        &hotkey_string,
+                                        active_mode,
+                                    ),
+                                    Stage::Recording { binding_id: id, .. }
+                                        if id == &binding_id =>
+                                    {
+                                        stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    }
+                                    _ => debug!("Ignoring press for '{binding_id}': pipeline busy"),
                                 }
                             }
                         }
@@ -192,14 +311,28 @@ impl TranscriptionCoordinator {
                             recording_was_active,
                         } => {
                             pending_release = None;
+                            hybrid_press_started = None;
+                            latched_binding = None;
+                            consumed_release_binding = None;
                             // Don't reset during processing — wait for the pipeline to finish.
                             if !matches!(stage, Stage::Processing)
-                                && (recording_was_active || matches!(stage, Stage::Recording(_)))
+                                && (recording_was_active
+                                    || matches!(stage, Stage::Recording { .. }))
                             {
                                 stage = Stage::Idle;
                             }
                         }
+                        Command::ShortcutsSuspended => {
+                            pending_release = None;
+                            hybrid_press_started = None;
+                            latched_binding = None;
+                            consumed_release_binding = None;
+                        }
                         Command::ProcessingFinished => {
+                            pending_release = None;
+                            hybrid_press_started = None;
+                            latched_binding = None;
+                            consumed_release_binding = None;
                             stage = Stage::Idle;
                         }
                     }
@@ -215,13 +348,13 @@ impl TranscriptionCoordinator {
     }
 
     /// Send a keyboard/signal input event for a transcribe binding.
-    /// For signal-based toggles, use `is_pressed: true` and `push_to_talk: false`.
+    /// Signals and CLI use `RecordingMode::Toggle` with a press-only event.
     pub fn send_input(
         &self,
         binding_id: &str,
         hotkey_string: &str,
         is_pressed: bool,
-        push_to_talk: bool,
+        recording_mode: RecordingMode,
     ) {
         if self
             .tx
@@ -229,7 +362,7 @@ impl TranscriptionCoordinator {
                 binding_id: binding_id.to_string(),
                 hotkey_string: hotkey_string.to_string(),
                 is_pressed,
-                push_to_talk,
+                recording_mode,
             })
             .is_err()
         {
@@ -254,9 +387,23 @@ impl TranscriptionCoordinator {
             warn!("Transcription coordinator channel closed");
         }
     }
+
+    /// Clear transient shortcut state while shortcuts are unregistered for
+    /// recording a new binding. The active pipeline, if any, is left alone.
+    pub fn notify_shortcuts_suspended(&self) {
+        if self.tx.send(Command::ShortcutsSuspended).is_err() {
+            warn!("Transcription coordinator channel closed");
+        }
+    }
 }
 
-fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
+fn start(
+    app: &AppHandle,
+    stage: &mut Stage,
+    binding_id: &str,
+    hotkey_string: &str,
+    recording_mode: RecordingMode,
+) {
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
@@ -266,7 +413,10 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
         .try_state::<Arc<AudioRecordingManager>>()
         .is_some_and(|a| a.is_recording())
     {
-        *stage = Stage::Recording(binding_id.to_string());
+        *stage = Stage::Recording {
+            binding_id: binding_id.to_string(),
+            recording_mode,
+        };
     } else {
         debug!("Start for '{binding_id}' did not begin recording; staying idle");
     }
@@ -288,7 +438,13 @@ mod tests {
     #[test]
     fn push_to_talk_release_while_recording_defers_release() {
         assert_eq!(
-            classify_ptt_event(None, false, true, "transcribe", Some("transcribe")),
+            classify_release_event(
+                None,
+                false,
+                RecordingMode::PushToTalk,
+                "transcribe",
+                Some("transcribe"),
+            ),
             PttAction::DeferRelease
         );
     }
@@ -296,10 +452,10 @@ mod tests {
     #[test]
     fn push_to_talk_press_matching_pending_release_cancels_release() {
         assert_eq!(
-            classify_ptt_event(
+            classify_release_event(
                 Some("transcribe"),
                 true,
-                true,
+                RecordingMode::PushToTalk,
                 "transcribe",
                 Some("transcribe")
             ),
@@ -310,17 +466,23 @@ mod tests {
     #[test]
     fn toggle_mode_press_and_release_pass_through() {
         assert_eq!(
-            classify_ptt_event(
+            classify_release_event(
                 Some("transcribe"),
                 true,
-                false,
+                RecordingMode::Toggle,
                 "transcribe",
                 Some("transcribe")
             ),
             PttAction::Passthrough
         );
         assert_eq!(
-            classify_ptt_event(None, false, false, "transcribe", Some("transcribe")),
+            classify_release_event(
+                None,
+                false,
+                RecordingMode::Toggle,
+                "transcribe",
+                Some("transcribe"),
+            ),
             PttAction::Passthrough
         );
     }
@@ -328,10 +490,10 @@ mod tests {
     #[test]
     fn press_for_different_binding_than_pending_release_passes_through() {
         assert_eq!(
-            classify_ptt_event(
+            classify_release_event(
                 Some("transcribe"),
                 true,
-                true,
+                RecordingMode::PushToTalk,
                 "transcribe_with_post_process",
                 Some("transcribe")
             ),
@@ -342,7 +504,13 @@ mod tests {
     #[test]
     fn press_matching_pending_release_cancels_without_recording_state() {
         assert_eq!(
-            classify_ptt_event(Some("transcribe"), true, true, "transcribe", None),
+            classify_release_event(
+                Some("transcribe"),
+                true,
+                RecordingMode::PushToTalk,
+                "transcribe",
+                None,
+            ),
             PttAction::CancelRelease
         );
     }
@@ -358,7 +526,7 @@ mod tests {
     // off. The fix defers each release for a short grace window and cancels it
     // when the matching auto-repeat press arrives.
     //
-    // The unit tests above assert `classify_ptt_event` in isolation. The
+    // The unit tests above assert `classify_release_event` in isolation. The
     // simulator below threads that classifier through the same `pending_release`
     // / `stage` state transitions the coordinator loop performs (lines that
     // handle `Command::Input` and the `recv_timeout` grace expiry), so a whole
@@ -378,7 +546,7 @@ mod tests {
         Grace,
     }
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     enum SimStage {
         Idle,
         Recording,
@@ -392,7 +560,7 @@ mod tests {
     }
 
     /// Mirror of the coordinator loop's decision logic for a single push-to-talk
-    /// binding: it calls the real `classify_ptt_event` and applies the exact same
+    /// binding: it calls the real `classify_release_event` and applies the exact same
     /// Defer / Cancel / debounce / start / stop transitions.
     fn simulate(events: &[Ev]) -> SimResult {
         let mut stage = SimStage::Idle;
@@ -427,10 +595,10 @@ mod tests {
                         None
                     };
 
-                    match classify_ptt_event(
+                    match classify_release_event(
                         pending_binding,
                         is_pressed,
-                        true, // push_to_talk
+                        RecordingMode::PushToTalk,
                         BINDING,
                         recording_binding,
                     ) {
@@ -517,5 +685,202 @@ mod tests {
             "a genuine release should stop recording exactly once"
         );
         assert_eq!(result.stage, SimStage::Processing);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct HybridResult {
+        starts: u32,
+        stops: u32,
+        stage: SimStage,
+        latched: bool,
+        consumed_release: bool,
+    }
+
+    /// Deterministic mirror of the Tap-or-hold coordinator transitions. Times
+    /// are event timestamps, so the 250 ms boundary is independent of the
+    /// release-grace timer used to absorb X11 auto-repeat events.
+    struct HybridSimulation {
+        stage: SimStage,
+        press_started_at: Option<u64>,
+        pending_release: Option<(u64, u64)>,
+        latched: bool,
+        consumed_release: bool,
+        starts: u32,
+        stops: u32,
+    }
+
+    impl HybridSimulation {
+        fn new() -> Self {
+            Self {
+                stage: SimStage::Idle,
+                press_started_at: None,
+                pending_release: None,
+                latched: false,
+                consumed_release: false,
+                starts: 0,
+                stops: 0,
+            }
+        }
+
+        fn press(&mut self, at_ms: u64) {
+            if self.pending_release.take().is_some() {
+                return; // synthesized X11 repeat press
+            }
+            match &self.stage {
+                SimStage::Idle => {
+                    self.stage = SimStage::Recording;
+                    self.press_started_at = Some(at_ms);
+                    self.starts += 1;
+                }
+                SimStage::Recording if self.latched => {
+                    self.stage = SimStage::Processing;
+                    self.press_started_at = None;
+                    self.latched = false;
+                    self.consumed_release = true;
+                    self.stops += 1;
+                }
+                SimStage::Recording | SimStage::Processing => {}
+            }
+        }
+
+        fn release(&mut self, at_ms: u64) {
+            if self.consumed_release {
+                self.consumed_release = false;
+                return;
+            }
+            if self.stage == SimStage::Recording && self.pending_release.is_none() {
+                self.pending_release = Some((self.press_started_at.unwrap(), at_ms));
+            }
+        }
+
+        fn grace_elapsed(&mut self) {
+            let Some((pressed_at, released_at)) = self.pending_release.take() else {
+                return;
+            };
+            if self.stage != SimStage::Recording {
+                return;
+            }
+            if released_at - pressed_at < TAP_OR_HOLD_THRESHOLD.as_millis() as u64 {
+                self.press_started_at = None;
+                self.latched = true;
+            } else {
+                self.stage = SimStage::Processing;
+                self.press_started_at = None;
+                self.stops += 1;
+            }
+        }
+
+        fn cancel(&mut self) {
+            self.stage = SimStage::Idle;
+            self.press_started_at = None;
+            self.pending_release = None;
+            self.latched = false;
+            self.consumed_release = false;
+        }
+
+        fn result(&self) -> HybridResult {
+            HybridResult {
+                starts: self.starts,
+                stops: self.stops,
+                stage: self.stage.clone(),
+                latched: self.latched,
+                consumed_release: self.consumed_release,
+            }
+        }
+    }
+
+    #[test]
+    fn short_tap_latches_then_second_press_stops_and_consumes_release() {
+        let mut sim = HybridSimulation::new();
+        sim.press(0);
+        sim.release(249);
+        sim.grace_elapsed();
+        assert_eq!(sim.result().stage, SimStage::Recording);
+        assert!(sim.result().latched);
+
+        sim.press(400);
+        assert_eq!(sim.result().stage, SimStage::Processing);
+        assert!(sim.result().consumed_release);
+        sim.release(405);
+
+        assert_eq!(
+            sim.result(),
+            HybridResult {
+                starts: 1,
+                stops: 1,
+                stage: SimStage::Processing,
+                latched: false,
+                consumed_release: false,
+            }
+        );
+    }
+
+    #[test]
+    fn exact_threshold_release_is_a_held_recording() {
+        let mut sim = HybridSimulation::new();
+        sim.press(0);
+        sim.release(TAP_OR_HOLD_THRESHOLD.as_millis() as u64);
+        sim.grace_elapsed();
+
+        assert_eq!(sim.result().stage, SimStage::Processing);
+        assert_eq!(sim.result().stops, 1);
+        assert!(!sim.result().latched);
+    }
+
+    #[test]
+    fn autorepeat_release_press_pair_preserves_original_hybrid_press_time() {
+        let mut sim = HybridSimulation::new();
+        sim.press(0);
+        sim.release(100);
+        sim.press(105); // synthesized repeat press cancels the pending release
+        sim.release(600);
+        sim.grace_elapsed();
+
+        assert_eq!(sim.result().starts, 1);
+        assert_eq!(sim.result().stops, 1);
+        assert_eq!(sim.result().stage, SimStage::Processing);
+    }
+
+    #[test]
+    fn cancel_clears_held_and_latched_hybrid_state() {
+        let mut held = HybridSimulation::new();
+        held.press(0);
+        held.cancel();
+        assert_eq!(held.result().stage, SimStage::Idle);
+        assert!(!held.result().latched);
+
+        let mut latched = HybridSimulation::new();
+        latched.press(0);
+        latched.release(10);
+        latched.grace_elapsed();
+        latched.cancel();
+        assert_eq!(latched.result().stage, SimStage::Idle);
+        assert!(!latched.result().latched);
+    }
+
+    #[test]
+    fn threshold_helper_and_press_only_toggle_behavior_are_explicit() {
+        let start = Instant::now();
+        assert!(is_short_tap(
+            start,
+            start + TAP_OR_HOLD_THRESHOLD - Duration::from_millis(1)
+        ));
+        assert!(!is_short_tap(start, start + TAP_OR_HOLD_THRESHOLD));
+        assert_eq!(
+            classify_release_event(
+                None,
+                true,
+                RecordingMode::Toggle,
+                "transcribe",
+                Some("transcribe"),
+            ),
+            PttAction::Passthrough,
+            "a CLI/signal press is a regular toggle press regardless of UI mode"
+        );
+        assert_eq!(
+            effective_recording_mode(RecordingMode::Toggle, Some(RecordingMode::PushToTalk),),
+            RecordingMode::Toggle,
+            "a CLI/signal press can stop an existing held recording"
+        );
     }
 }

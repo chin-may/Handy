@@ -111,6 +111,7 @@
         "description": "Potřebný pro psaní přepsaného textu do vašich aplikací."
       },
       "grant": "Udělit oprávnění",
+      "recheck": "Zkontrolovat znovu",
       "granted": "Uděleno",
       "waiting": "Čekání...",
       "allGranted": "Vše připraveno!",
@@ -217,6 +218,15 @@
       "pushToTalk": {
         "label": "Stisk a mluv",
         "description": "Podržte pro nahrávání, uvolněte pro zastavení"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "sound": {

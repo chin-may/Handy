@@ -111,6 +111,7 @@
         "description": "Krävs för att skriva transkriberad text i dina program."
       },
       "grant": "Bevilja behörighet",
+      "recheck": "Kontrollera igen",
       "granted": "Beviljad",
       "waiting": "Väntar...",
       "allGranted": "Allt klart!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "Tryck för att tala",
         "description": "Håll ned för att spela in, släpp för att stoppa"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {

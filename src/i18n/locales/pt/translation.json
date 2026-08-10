@@ -111,6 +111,7 @@
         "description": "Necessário para digitar o texto transcrito em seus aplicativos."
       },
       "grant": "Conceder Permissão",
+      "recheck": "Verificar novamente",
       "granted": "Concedido",
       "waiting": "Aguardando...",
       "allGranted": "Tudo pronto!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "Pressionar para Falar",
         "description": "Segure para gravar, solte para parar"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {

@@ -111,6 +111,7 @@
         "description": "Transkribe edilen metni uygulamalarınıza yazabilmek için gereklidir."
       },
       "grant": "İzin Ver",
+      "recheck": "Tekrar kontrol et",
       "granted": "Verildi",
       "waiting": "Bekleniyor...",
       "allGranted": "Her şey hazır!",
@@ -217,6 +218,15 @@
       "pushToTalk": {
         "label": "Bas Konuş",
         "description": "Kaydetmek için basılı tutun, durdurmak için bırakın"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "sound": {

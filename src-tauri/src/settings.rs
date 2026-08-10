@@ -189,6 +189,19 @@ pub enum KeyboardImplementation {
     HandyKeys,
 }
 
+/// How the transcription shortcut controls a recording.
+///
+/// `TapOrHold` starts recording on key-down, then uses the first key-up to
+/// distinguish a short tap (latch recording) from a hold (stop recording).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingMode {
+    Toggle,
+    PushToTalk,
+    #[default]
+    TapOrHold,
+}
+
 impl Default for KeyboardImplementation {
     fn default() -> Self {
         #[cfg(target_os = "linux")]
@@ -347,8 +360,8 @@ pub struct AppSettings {
     /// default bindings for any missing keys before the settings are used.
     #[serde(default)]
     pub bindings: HashMap<String, ShortcutBinding>,
-    #[serde(default = "default_push_to_talk")]
-    pub push_to_talk: bool,
+    #[serde(default)]
+    pub recording_mode: RecordingMode,
     #[serde(default)]
     pub audio_feedback: bool,
     #[serde(default = "default_audio_feedback_volume")]
@@ -481,14 +494,10 @@ fn default_model() -> String {
     "".to_string()
 }
 
-const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
-}
-
-fn default_push_to_talk() -> bool {
-    true
 }
 
 fn default_always_on_microphone() -> bool {
@@ -854,7 +863,7 @@ pub fn get_default_settings() -> AppSettings {
     AppSettings {
         settings_schema_version: default_settings_schema_version(),
         bindings,
-        push_to_talk: default_push_to_talk(),
+        recording_mode: RecordingMode::TapOrHold,
         audio_feedback: false,
         audio_feedback_volume: default_audio_feedback_volume(),
         sound_theme: default_sound_theme(),
@@ -1076,6 +1085,30 @@ fn apply_settings_migrations(
             settings.transcribe_accelerator = TranscribeAcceleratorSetting::Auto;
             settings.transcribe_gpu_device = default_transcribe_gpu_device();
         }
+        updated = true;
+    }
+
+    // Replace the legacy boolean with an explicit mode without changing how
+    // existing shortcuts behave. Only stores that predate `recording_mode`
+    // enter this branch; fresh installs use the Tap-or-hold default.
+    if stored_schema_version < 2 && settings_value.get("recording_mode").is_none() {
+        let migrated_mode = match settings_value
+            .get("push_to_talk")
+            .and_then(|value| value.as_bool())
+        {
+            Some(true) => RecordingMode::PushToTalk,
+            Some(false) => RecordingMode::Toggle,
+            None => RecordingMode::TapOrHold,
+        };
+        if settings.recording_mode != migrated_mode {
+            settings.recording_mode = migrated_mode;
+            updated = true;
+        }
+    }
+
+    if stored_schema_version < CURRENT_SETTINGS_SCHEMA_VERSION as u64
+        && settings.settings_schema_version != CURRENT_SETTINGS_SCHEMA_VERSION
+    {
         settings.settings_schema_version = CURRENT_SETTINGS_SCHEMA_VERSION;
         updated = true;
     }
@@ -1147,7 +1180,7 @@ mod tests {
     fn empty_store_parses_with_defaults() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
             .expect("all AppSettings fields need serde defaults");
-        assert!(settings.push_to_talk);
+        assert_eq!(settings.recording_mode, RecordingMode::TapOrHold);
         assert!(!settings.audio_feedback);
         assert!(settings.filler_word_removal_enabled);
         // Bindings default to empty; the load path merges the real defaults in.
@@ -1156,7 +1189,7 @@ mod tests {
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to
     /// disk. This pins backwards compatibility: it must always parse strictly
-    /// (no salvage) and require no migration rewrite.
+    /// (no salvage) before its one-time schema migration.
     ///
     /// If a schema change breaks this test, do NOT just update the fixture —
     /// it stands in for the stores on users' machines. Add a
@@ -1269,7 +1302,12 @@ mod tests {
         assert_eq!(settings.sound_theme, SoundTheme::Pop);
         assert!(settings.filler_word_removal_enabled);
 
-        // A current-format store must not be rewritten on every read.
+        assert!(apply_settings_migrations(&mut settings, &stored));
+        assert_eq!(settings.recording_mode, RecordingMode::Toggle);
+        assert_eq!(
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
+        );
         assert!(!apply_settings_migrations(&mut settings, &stored));
     }
 
@@ -1474,6 +1512,65 @@ mod tests {
             TranscribeAcceleratorSetting::Gpu
         );
         assert_eq!(settings.transcribe_gpu_device, 2);
+    }
+
+    #[test]
+    fn push_to_talk_true_migrates_to_push_to_talk_mode_once() {
+        let raw = serde_json::json!({
+            "settings_schema_version": 1,
+            "push_to_talk": true,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+        });
+        let mut settings = get_default_settings();
+        settings.settings_schema_version = 1;
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(settings.recording_mode, RecordingMode::PushToTalk);
+        assert_eq!(
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
+        );
+        assert!(!apply_settings_migrations(&mut settings, &raw));
+    }
+
+    #[test]
+    fn push_to_talk_false_migrates_to_toggle_mode_once() {
+        let raw = serde_json::json!({
+            "settings_schema_version": 1,
+            "push_to_talk": false,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+        });
+        let mut settings = get_default_settings();
+        settings.settings_schema_version = 1;
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(settings.recording_mode, RecordingMode::Toggle);
+        assert_eq!(
+            settings.settings_schema_version,
+            CURRENT_SETTINGS_SCHEMA_VERSION
+        );
+        assert!(!apply_settings_migrations(&mut settings, &raw));
+    }
+
+    #[test]
+    fn current_recording_mode_is_not_overwritten_by_legacy_boolean() {
+        let raw = serde_json::json!({
+            "settings_schema_version": CURRENT_SETTINGS_SCHEMA_VERSION,
+            "push_to_talk": true,
+            "recording_mode": "tap_or_hold",
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+        });
+        let mut settings = get_default_settings();
+        settings.recording_mode = RecordingMode::TapOrHold;
+
+        assert!(!apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(settings.recording_mode, RecordingMode::TapOrHold);
     }
 
     #[test]

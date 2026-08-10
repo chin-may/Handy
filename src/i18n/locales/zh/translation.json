@@ -111,6 +111,7 @@
         "description": "需要将转录文本输入到您的应用程序中。"
       },
       "grant": "授予权限",
+      "recheck": "再次检查",
       "granted": "已授予",
       "waiting": "等待中...",
       "allGranted": "全部完成！",
@@ -217,6 +218,15 @@
       "pushToTalk": {
         "label": "按住说话",
         "description": "按住录制，松开停止"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "sound": {

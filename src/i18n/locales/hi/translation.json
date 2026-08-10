@@ -111,6 +111,7 @@
         "description": "ट्रांसक्राइब किया गया टेक्स्ट आपके ऐप्लिकेशन में टाइप करने के लिए ज़रूरी."
       },
       "grant": "अनुमति दें",
+      "recheck": "फिर से जाँचें",
       "granted": "अनुमति मिल गई",
       "waiting": "इंतज़ार किया जा रहा है...",
       "allGranted": "सब तैयार!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "पुश टू टॉक",
         "description": "रिकॉर्ड करने के लिए दबाकर रखें, रोकने के लिए छोड़ दें"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {

@@ -111,6 +111,7 @@
         "description": "Необходим е, за да въвежда транскрибирания текст във вашите приложения."
       },
       "grant": "Даване на разрешение",
+      "recheck": "Провери отново",
       "granted": "Разрешено",
       "waiting": "Изчакване...",
       "allGranted": "Готово!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "Натискане за говорене",
         "description": "Задръжте за запис, пуснете за спиране"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {

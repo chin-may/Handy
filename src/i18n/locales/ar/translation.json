@@ -111,6 +111,7 @@
         "description": ".مطلوب لكتابة النص المفرغ في تطبيقاتك"
       },
       "grant": "منح الإذن",
+      "recheck": "تحقق مرة أخرى",
       "granted": "تم المنح",
       "waiting": "...في الانتظار",
       "allGranted": "كل شيء جاهز!",
@@ -194,6 +195,15 @@
       "pushToTalk": {
         "label": "اضغط للتحدث",
         "description": "استمر في الضغط للتسجيل، واترك للتوقف"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "sound": {

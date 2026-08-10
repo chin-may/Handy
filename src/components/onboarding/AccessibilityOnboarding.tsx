@@ -74,6 +74,45 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     return microphoneStatus.overall_access !== "denied";
   }, []);
 
+  const refreshMacPermissions = useCallback(async () => {
+    const [accessibilityGranted, microphoneGranted] = await Promise.all([
+      checkAccessibilityPermission(),
+      checkMicrophonePermission(),
+    ]);
+
+    if (accessibilityGranted) {
+      try {
+        await Promise.all([
+          commands.initializeEnigo(),
+          commands.initializeShortcuts(),
+        ]);
+      } catch (error) {
+        console.warn("Failed to initialize after permission grant:", error);
+      }
+    }
+
+    setPermissions((previous) => ({
+      accessibility: accessibilityGranted
+        ? "granted"
+        : previous.accessibility === "waiting"
+          ? "waiting"
+          : "needed",
+      microphone: microphoneGranted
+        ? "granted"
+        : previous.microphone === "waiting"
+          ? "waiting"
+          : "needed",
+    }));
+
+    if (accessibilityGranted && microphoneGranted) {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      await completeOnboarding();
+    }
+  }, [completeOnboarding]);
+
   // Check platform and permission status on mount
   useEffect(() => {
     const currentPlatform = platform();
@@ -95,33 +134,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     const checkInitial = async () => {
       if (nextPlatform === "macos") {
         try {
-          const [accessibilityGranted, microphoneGranted] = await Promise.all([
-            checkAccessibilityPermission(),
-            checkMicrophonePermission(),
-          ]);
-
-          // If accessibility is granted, initialize Enigo and shortcuts
-          if (accessibilityGranted) {
-            try {
-              await Promise.all([
-                commands.initializeEnigo(),
-                commands.initializeShortcuts(),
-              ]);
-            } catch (e) {
-              console.warn("Failed to initialize after permission grant:", e);
-            }
-          }
-
-          const newState: PermissionsState = {
-            accessibility: accessibilityGranted ? "granted" : "needed",
-            microphone: microphoneGranted ? "granted" : "needed",
-          };
-
-          setPermissions(newState);
-
-          if (accessibilityGranted && microphoneGranted) {
-            await completeOnboarding();
-          }
+          await refreshMacPermissions();
         } catch (error) {
           console.error("Failed to check macOS permissions:", error);
           toast.error(t("onboarding.permissions.errors.checkFailed"));
@@ -156,7 +169,13 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     };
 
     checkInitial();
-  }, [completeOnboarding, hasWindowsMicrophoneAccess, onComplete, t]);
+  }, [
+    completeOnboarding,
+    hasWindowsMicrophoneAccess,
+    onComplete,
+    refreshMacPermissions,
+    t,
+  ]);
 
   // Polling for permissions after user clicks a button
   const startPolling = useCallback(() => {
@@ -182,40 +201,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
           return;
         }
 
-        const [accessibilityGranted, microphoneGranted] = await Promise.all([
-          checkAccessibilityPermission(),
-          checkMicrophonePermission(),
-        ]);
-
-        setPermissions((prev) => {
-          const newState = { ...prev };
-
-          if (accessibilityGranted && prev.accessibility !== "granted") {
-            newState.accessibility = "granted";
-            // Initialize Enigo and shortcuts when accessibility is granted
-            Promise.all([
-              commands.initializeEnigo(),
-              commands.initializeShortcuts(),
-            ]).catch((e) => {
-              console.warn("Failed to initialize after permission grant:", e);
-            });
-          }
-
-          if (microphoneGranted && prev.microphone !== "granted") {
-            newState.microphone = "granted";
-          }
-
-          return newState;
-        });
-
-        // If both granted, stop polling, refresh audio devices, and proceed
-        if (accessibilityGranted && microphoneGranted) {
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          await completeOnboarding();
-        }
+        await refreshMacPermissions();
 
         // Reset error count on success
         errorCountRef.current = 0;
@@ -233,7 +219,12 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
         }
       }
     }, 1000);
-  }, [completeOnboarding, hasWindowsMicrophoneAccess, permissionPlatform, t]);
+  }, [
+    hasWindowsMicrophoneAccess,
+    permissionPlatform,
+    refreshMacPermissions,
+    t,
+  ]);
 
   // Cleanup polling and timeouts on unmount
   useEffect(() => {
@@ -258,6 +249,15 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     }
   };
 
+  const handleOpenAccessibilitySettings = async () => {
+    try {
+      await commands.openAccessibilityPrivacySettings();
+    } catch (error) {
+      console.error("Failed to open Accessibility privacy settings:", error);
+      toast.error(t("onboarding.permissions.errors.requestFailed"));
+    }
+  };
+
   const handleGrantMicrophone = async () => {
     try {
       if (isWindows) {
@@ -271,6 +271,27 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     } catch (error) {
       console.error("Failed to request microphone permission:", error);
       toast.error(t("onboarding.permissions.errors.requestFailed"));
+    }
+  };
+
+  const handleRecheckPermissions = async () => {
+    try {
+      if (isMacOS) {
+        await refreshMacPermissions();
+      } else if (isWindows) {
+        const microphoneGranted = await hasWindowsMicrophoneAccess();
+        setPermissions({
+          accessibility: "granted",
+          microphone: microphoneGranted ? "granted" : "needed",
+        });
+
+        if (microphoneGranted) {
+          await completeOnboarding();
+        }
+      }
+    } catch (error) {
+      console.error("Failed to recheck permissions:", error);
+      toast.error(t("onboarding.permissions.errors.checkFailed"));
     }
   };
 
@@ -341,9 +362,17 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
                     {t("onboarding.permissions.granted")}
                   </div>
                 ) : permissions.microphone === "waiting" ? (
-                  <div className="flex items-center gap-2 text-text/50 text-sm">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {t("onboarding.permissions.waiting")}
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-text/50">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {t("onboarding.permissions.waiting")}
+                    </div>
+                    <button
+                      onClick={handleRecheckPermissions}
+                      className="px-3 py-1 rounded-md border border-mid-gray/50 hover:border-logo-primary text-text/80 hover:text-text transition-colors"
+                    >
+                      {t("onboarding.permissions.recheck")}
+                    </button>
                   </div>
                 ) : (
                   <button
@@ -380,9 +409,23 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
                     {t("onboarding.permissions.granted")}
                   </div>
                 ) : permissions.accessibility === "waiting" ? (
-                  <div className="flex items-center gap-2 text-text/50 text-sm">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {t("onboarding.permissions.waiting")}
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-text/50">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {t("onboarding.permissions.waiting")}
+                    </div>
+                    <button
+                      onClick={handleOpenAccessibilitySettings}
+                      className="px-3 py-1 rounded-md border border-mid-gray/50 hover:border-logo-primary text-text/80 hover:text-text transition-colors"
+                    >
+                      {t("accessibility.openSettings")}
+                    </button>
+                    <button
+                      onClick={handleRecheckPermissions}
+                      className="px-3 py-1 rounded-md border border-mid-gray/50 hover:border-logo-primary text-text/80 hover:text-text transition-colors"
+                    >
+                      {t("onboarding.permissions.recheck")}
+                    </button>
                   </div>
                 ) : (
                   <button

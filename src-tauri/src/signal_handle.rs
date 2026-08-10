@@ -1,3 +1,4 @@
+use crate::settings::RecordingMode;
 use crate::TranscriptionCoordinator;
 #[cfg(unix)]
 use log::debug;
@@ -17,7 +18,9 @@ use std::thread;
 /// Used by signal handlers, CLI flags, and any other external trigger.
 pub fn send_transcription_input(app: &AppHandle, binding_id: &str, source: &str) {
     if let Some(c) = app.try_state::<TranscriptionCoordinator>() {
-        c.send_input(binding_id, source, true, false);
+        // External controls are press-only toggle triggers. They deliberately
+        // bypass the user's hold/hybrid preference because no key-up follows.
+        c.send_input(binding_id, source, true, RecordingMode::Toggle);
     } else {
         warn!("TranscriptionCoordinator not initialized");
     }

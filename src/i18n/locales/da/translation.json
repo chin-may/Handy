@@ -111,6 +111,7 @@
         "description": "Påkrævet for at skrive den transskriberede tekst ind i dine programmer."
       },
       "grant": "Giv tilladelse",
+      "recheck": "Kontrollér igen",
       "granted": "Givet",
       "waiting": "Venter...",
       "allGranted": "Alt er klar!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "Tryk-for-at-tale",
         "description": "Hold nede for at optage, slip for at stoppe"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {

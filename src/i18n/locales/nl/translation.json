@@ -111,6 +111,7 @@
         "description": "Vereist om getranscribeerde tekst in je applicaties te kunnen typen."
       },
       "grant": "Machtiging verlenen",
+      "recheck": "Opnieuw controleren",
       "granted": "Verleend",
       "waiting": "Wachten...",
       "allGranted": "Alles ingesteld!",
@@ -197,6 +198,15 @@
       "pushToTalk": {
         "label": "Push-to-talk",
         "description": "Ingedrukt houden om op te nemen, loslaten om te stoppen"
+      },
+      "recordingMode": {
+        "label": "Recording shortcut mode",
+        "description": "Choose whether the dictation shortcut toggles, records while held, or supports both tap and hold.",
+        "options": {
+          "toggle": "Toggle",
+          "pushToTalk": "Push to talk",
+          "tapOrHold": "Tap or hold"
+        }
       }
     },
     "models": {
