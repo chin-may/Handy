@@ -177,9 +177,9 @@
             "name": "Бърз клавиш за отказ",
             "description": "Клавишната комбинация за отмяна на текущия запис."
           },
-          "transcribe_with_post_process": {
-            "name": "Бърз клавиш за постобработка",
-            "description": "По избор: отделна комбинация, която винаги прилага ИИ постобработка върху транскрипцията."
+          "insert_latest_post_processed": {
+            "name": "Insert latest AI-cleaned text",
+            "description": "Inserts the latest completed AI-cleaned transcription at the cursor."
           }
         },
         "errors": {
@@ -679,8 +679,12 @@
     }
   },
   "overlay": {
+    "cleanup_pending": "Finishing AI cleanup...",
+    "cleanup_unavailable": "AI cleanup unavailable",
+    "cleanup_empty": "No AI-cleaned text yet",
     "transcribing": "Транскрибиране...",
-    "processing": "Обработка..."
+    "processing": "Обработка...",
+    "ai_cleaned": "AI-cleaned text"
   },
   "whatsNew": {
     "title": "Ново в Handy v{{version}}"

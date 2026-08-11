@@ -128,3 +128,31 @@ pub fn paste_text_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Undo the most recent edit in the focused target application. The eager AI
+/// cleanup hotkey deliberately uses this best-effort operation to replace its
+/// immediately pasted raw transcription with the cleaned version.
+pub fn undo_last_edit(enigo: &mut Enigo) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let (modifier_key, z_key) = (Key::Meta, Key::Other(6));
+    #[cfg(not(target_os = "macos"))]
+    let (modifier_key, z_key) = (Key::Control, Key::Unicode('z'));
+
+    enigo
+        .key(modifier_key, enigo::Direction::Press)
+        .map_err(|e| format!("Failed to press undo modifier: {}", e))?;
+    enigo
+        .key(z_key, enigo::Direction::Click)
+        .map_err(|e| format!("Failed to send undo key: {}", e))?;
+
+    // Keep Cmd/Ctrl held long enough for applications that inspect the
+    // modifier state while dispatching their undo command. This matches the
+    // paste chord's compatibility behaviour above.
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    enigo
+        .key(modifier_key, enigo::Direction::Release)
+        .map_err(|e| format!("Failed to release undo modifier: {}", e))?;
+
+    Ok(())
+}

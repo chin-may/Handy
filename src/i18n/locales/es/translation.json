@@ -197,9 +197,9 @@
             "name": "Atajo de cancelar",
             "description": "El atajo de teclado para cancelar la grabación actual."
           },
-          "transcribe_with_post_process": {
-            "name": "Tecla de post procesamiento",
-            "description": "Opcional: Una tecla de acceso rápido dedicada que siempre aplica post procesamiento con IA a tu transcripción."
+          "insert_latest_post_processed": {
+            "name": "Insert latest AI-cleaned text",
+            "description": "Inserts the latest completed AI-cleaned transcription at the cursor."
           }
         },
         "errors": {
@@ -679,8 +679,12 @@
     }
   },
   "overlay": {
+    "cleanup_pending": "Finishing AI cleanup...",
+    "cleanup_unavailable": "AI cleanup unavailable",
+    "cleanup_empty": "No AI-cleaned text yet",
     "transcribing": "Transcribiendo...",
-    "processing": "Procesando..."
+    "processing": "Procesando...",
+    "ai_cleaned": "AI-cleaned text"
   },
   "whatsNew": {
     "title": "Nuevo en Handy v{{version}}"

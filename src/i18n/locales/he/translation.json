@@ -177,9 +177,9 @@
             "name": "קיצור מקשים לביטול",
             "description": "קיצור המקלדת לביטול ההקלטה הנוכחית."
           },
-          "transcribe_with_post_process": {
-            "name": "קיצור לעיבוד משלים",
-            "description": "אופציונלי: קיצור מקשים ייעודי שתמיד מפעיל עיבוד AI על התמלול."
+          "insert_latest_post_processed": {
+            "name": "Insert latest AI-cleaned text",
+            "description": "Inserts the latest completed AI-cleaned transcription at the cursor."
           }
         },
         "errors": {
@@ -679,8 +679,12 @@
     }
   },
   "overlay": {
+    "cleanup_pending": "Finishing AI cleanup...",
+    "cleanup_unavailable": "AI cleanup unavailable",
+    "cleanup_empty": "No AI-cleaned text yet",
     "transcribing": "מתמלל...",
-    "processing": "מעבד..."
+    "processing": "מעבד...",
+    "ai_cleaned": "AI-cleaned text"
   },
   "whatsNew": {
     "title": "חדש ב-Handy v{{version}}"

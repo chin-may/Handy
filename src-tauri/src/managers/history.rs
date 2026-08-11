@@ -327,6 +327,59 @@ impl HistoryManager {
         Ok(entry)
     }
 
+    /// Update only asynchronous AI-cleanup fields, leaving the original ASR
+    /// transcription untouched even when a retry or a later cleanup finishes.
+    pub fn update_post_processing(
+        &self,
+        id: i64,
+        post_processed_text: String,
+        post_process_prompt: Option<String>,
+    ) -> Result<HistoryEntry> {
+        let conn = self.get_connection()?;
+        let entry = Self::update_post_processing_with_conn(
+            &conn,
+            id,
+            post_processed_text,
+            post_process_prompt,
+        )?;
+
+        if let Err(e) = (HistoryUpdatePayload::Updated {
+            entry: entry.clone(),
+        })
+        .emit(&self.app_handle)
+        {
+            error!("Failed to emit history-updated event: {}", e);
+        }
+
+        Ok(entry)
+    }
+
+    fn update_post_processing_with_conn(
+        conn: &Connection,
+        id: i64,
+        post_processed_text: String,
+        post_process_prompt: Option<String>,
+    ) -> Result<HistoryEntry> {
+        let updated = conn.execute(
+            "UPDATE transcription_history
+             SET post_processed_text = ?1, post_process_prompt = ?2
+             WHERE id = ?3",
+            params![post_processed_text, post_process_prompt, id],
+        )?;
+
+        if updated == 0 {
+            return Err(anyhow!("History entry {} not found", id));
+        }
+
+        conn.query_row(
+            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, post_process_requested
+             FROM transcription_history WHERE id = ?1",
+            params![id],
+            Self::map_history_entry,
+        )
+        .map_err(Into::into)
+    }
+
     pub fn cleanup_old_entries(&self) -> Result<()> {
         let retention_period = crate::settings::get_recording_retention_period(&self.app_handle);
 
@@ -733,5 +786,29 @@ mod tests {
 
         assert_eq!(entry.timestamp, 100);
         assert_eq!(entry.transcription_text, "completed");
+    }
+
+    #[test]
+    fn post_processing_update_preserves_original_transcription() {
+        let conn = setup_conn();
+        insert_entry(&conn, 100, "raw ASR text", None);
+
+        let updated = HistoryManager::update_post_processing_with_conn(
+            &conn,
+            1,
+            "Cleaned text.".to_string(),
+            Some("prompt snapshot".to_string()),
+        )
+        .expect("update cleanup fields");
+
+        assert_eq!(updated.transcription_text, "raw ASR text");
+        assert_eq!(
+            updated.post_processed_text.as_deref(),
+            Some("Cleaned text.")
+        );
+        assert_eq!(
+            updated.post_process_prompt.as_deref(),
+            Some("prompt snapshot")
+        );
     }
 }

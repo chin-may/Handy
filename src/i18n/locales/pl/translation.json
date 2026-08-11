@@ -197,9 +197,9 @@
             "name": "Skrót anulowania",
             "description": "Skrót klawiaturowy do anulowania bieżącego nagrywania."
           },
-          "transcribe_with_post_process": {
-            "name": "Skrót postprocessingu",
-            "description": "Opcjonalnie: Dedykowany skrót klawiszowy, który zawsze stosuje postprocessing AI do transkrypcji."
+          "insert_latest_post_processed": {
+            "name": "Insert latest AI-cleaned text",
+            "description": "Inserts the latest completed AI-cleaned transcription at the cursor."
           }
         },
         "errors": {
@@ -679,8 +679,12 @@
     }
   },
   "overlay": {
+    "cleanup_pending": "Finishing AI cleanup...",
+    "cleanup_unavailable": "AI cleanup unavailable",
+    "cleanup_empty": "No AI-cleaned text yet",
     "transcribing": "Transkrypcja...",
-    "processing": "Przetwarzanie..."
+    "processing": "Przetwarzanie...",
+    "ai_cleaned": "AI-cleaned text"
   },
   "whatsNew": {
     "title": "Nowości w Handy v{{version}}"

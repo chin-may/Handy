@@ -12,7 +12,15 @@ import type {
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 
-type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
+type OverlayState =
+  | "recording"
+  | "streaming"
+  | "cleanup_result"
+  | "transcribing"
+  | "processing"
+  | "cleanup_pending"
+  | "cleanup_unavailable"
+  | "cleanup_empty";
 
 // Number of reactive bars in the waveform (the simple, smoothed style shared by
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
@@ -75,6 +83,9 @@ const RecordingOverlay: React.FC = () => {
           setElapsed(0);
           setSession((s) => s + 1); // remount the card fresh for this session
         }
+        if (overlayState === "cleanup_result") {
+          setSession((s) => s + 1);
+        }
         setIsVisible(true);
       });
 
@@ -104,12 +115,20 @@ const RecordingOverlay: React.FC = () => {
         if (payload.kind) setWorkKind(payload.kind);
       });
 
+      const unlistenCleanupText = await listen<string>(
+        "cleanup-text",
+        (event) => {
+          setStreamText({ committed: event.payload, tentative: "" });
+        },
+      );
+
       return () => {
         unlistenShow();
         unlistenHide();
         unlistenLevel();
         unlistenStream();
         unlistenPhase();
+        unlistenCleanupText();
       };
     };
 
@@ -209,11 +228,22 @@ const RecordingOverlay: React.FC = () => {
     </div>
   );
 
+  const completedRow = (label: string) => (
+    <div className="sbase">
+      <div className="sbase-l">
+        <span className="sdone" aria-hidden="true" />
+      </div>
+      <span className="swork-label">{label}</span>
+      <div className="sbase-r" />
+    </div>
+  );
+
   // ---- Live overlay: a pill that sculpts open into a panel ----
-  if (state === "streaming") {
+  if (state === "streaming" || state === "cleanup_result") {
     const hasText =
       streamText.committed.length > 0 || streamText.tentative.length > 0;
-    const working = phase === "working";
+    const isCleanupResult = state === "cleanup_result";
+    const working = !isCleanupResult && phase === "working";
     // Keep the panel open whenever there's text — even while finalizing — so the
     // transcript stays put under a working spinner instead of collapsing and
     // squishing the text mid-stream. Only fall back to the small working pill
@@ -243,19 +273,21 @@ const RecordingOverlay: React.FC = () => {
                   <span className="tentative">{streamText.tentative}</span>
                   {/* Drop the blinking caret once finalizing — it's no longer
                       capturing, and a static spinner conveys the work. */}
-                  {!working && <span className="scaret" />}
+                  {!working && !isCleanupResult && <span className="scaret" />}
                 </p>
               </div>
             </div>
           </div>
-          {working
-            ? workingRow(
-                workKind === "polishing"
-                  ? t("overlay.processing")
-                  : t("overlay.transcribing"),
-                true,
-              )
-            : listeningRow(open, true)}
+          {isCleanupResult
+            ? completedRow(t("overlay.ai_cleaned"))
+            : working
+              ? workingRow(
+                  workKind === "polishing"
+                    ? t("overlay.processing")
+                    : t("overlay.transcribing"),
+                  true,
+                )
+              : listeningRow(open, true)}
         </div>
       </div>
     );
@@ -264,11 +296,13 @@ const RecordingOverlay: React.FC = () => {
   // ---- Minimal overlay: exactly one row at a time — waveform (recording), or a
   // spinner + label (transcribing / processing). Never both. The pill animates its
   // width between them; the cancel button is in both rows so it stays put.
-  const working = state === "transcribing" || state === "processing";
+  const working = state !== "recording";
   const workLabel =
     state === "processing"
       ? t("overlay.processing")
-      : t("overlay.transcribing");
+      : state === "transcribing"
+        ? t("overlay.transcribing")
+        : t(`overlay.${state}`);
 
   return (
     <div
@@ -278,7 +312,12 @@ const RecordingOverlay: React.FC = () => {
       <div
         className={`scard compact ${working && isVisible ? "cworking" : ""}`}
       >
-        {working ? workingRow(workLabel, true) : listeningRow(false, true)}
+        {working
+          ? workingRow(
+              workLabel,
+              state === "transcribing" || state === "processing",
+            )
+          : listeningRow(false, true)}
       </div>
     </div>
   );

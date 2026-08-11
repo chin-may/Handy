@@ -258,7 +258,7 @@ pub fn resume_all_shortcuts(app: &AppHandle) {
         if id == "cancel" {
             continue;
         }
-        if id == "transcribe_with_post_process" && !settings.post_process_enabled {
+        if id == "insert_latest_post_processed" && !settings.post_process_enabled {
             continue;
         }
         if let Err(e) = register_shortcut(app, binding.clone()) {
@@ -449,8 +449,8 @@ fn register_all_shortcuts_for_implementation(
             continue;
         }
 
-        // Skip post-processing shortcut when the feature is disabled
-        if id == "transcribe_with_post_process" && !current_settings.post_process_enabled {
+        // Skip the cleanup-copy shortcut when the feature is disabled.
+        if id == "insert_latest_post_processed" && !current_settings.post_process_enabled {
             continue;
         }
 
@@ -985,10 +985,10 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
     settings.post_process_enabled = enabled;
     settings::write_settings(&app, settings.clone());
 
-    // Register or unregister the post-processing shortcut
+    // Register or unregister the latest-cleanup insert shortcut.
     if let Some(binding) = settings
         .bindings
-        .get("transcribe_with_post_process")
+        .get("insert_latest_post_processed")
         .cloned()
     {
         if enabled {

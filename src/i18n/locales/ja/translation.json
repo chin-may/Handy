@@ -197,9 +197,9 @@
             "name": "キャンセルのショートカット",
             "description": "現在の録音をキャンセルするためのキーボードショートカット。"
           },
-          "transcribe_with_post_process": {
-            "name": "後処理のショートカット",
-            "description": "文字起こしに常に AI 後処理を適用するキーボードショートカット。 (任意)"
+          "insert_latest_post_processed": {
+            "name": "Insert latest AI-cleaned text",
+            "description": "Inserts the latest completed AI-cleaned transcription at the cursor."
           }
         },
         "errors": {
@@ -679,8 +679,12 @@
     }
   },
   "overlay": {
+    "cleanup_pending": "Finishing AI cleanup...",
+    "cleanup_unavailable": "AI cleanup unavailable",
+    "cleanup_empty": "No AI-cleaned text yet",
     "transcribing": "文字起こし中…",
-    "processing": "処理中…"
+    "processing": "処理中…",
+    "ai_cleaned": "AI-cleaned text"
   },
   "whatsNew": {
     "title": "Handy v{{version}} の新機能"

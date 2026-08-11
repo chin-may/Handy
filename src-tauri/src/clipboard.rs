@@ -674,6 +674,23 @@ fn paste_direct(
     with_enigo(app_handle, |enigo| input::paste_text_direct(enigo, text))
 }
 
+/// Replaces the focused application's most recent edit with text without
+/// reading, writing, or restoring the system clipboard. This is intentionally
+/// best-effort: the AI cleanup hotkey is an explicit user request to undo its
+/// raw dictation and insert the cleaned version at the same cursor location.
+pub fn replace_last_insertion_without_clipboard(
+    text: &str,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    with_enigo(app_handle, |enigo| input::undo_last_edit(enigo))?;
+    paste_direct(
+        text,
+        app_handle,
+        #[cfg(target_os = "linux")]
+        get_settings(app_handle).typing_tool,
+    )
+}
+
 pub(crate) fn send_return_key(enigo: &mut Enigo, key_type: AutoSubmitKey) -> Result<(), String> {
     match key_type {
         AutoSubmitKey::Enter => {

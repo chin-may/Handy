@@ -431,7 +431,7 @@ export const PostProcessingSettings: React.FC = () => {
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.postProcessing.hotkey.title")}>
         <ShortcutInput
-          shortcutId="transcribe_with_post_process"
+          shortcutId="insert_latest_post_processed"
           descriptionMode="tooltip"
           grouped={true}
         />

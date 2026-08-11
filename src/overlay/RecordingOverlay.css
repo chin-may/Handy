@@ -271,6 +271,15 @@
   flex: none;
   animation: sdot-pulse 1.9s infinite;
 }
+.sdone {
+  color: var(--s-accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+.sdone::before {
+  content: "✓";
+}
 @keyframes sdot-pulse {
   0% {
     box-shadow: 0 0 0 0 var(--s-accent-soft);

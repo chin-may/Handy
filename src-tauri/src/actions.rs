@@ -4,6 +4,9 @@ use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, S
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
+use crate::managers::latest_cleanup::{
+    InsertLatestOutcome, LatestCleanupCompletion, LatestCleanupCoordinator,
+};
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::TranscriptionManager;
@@ -398,6 +401,111 @@ pub(crate) struct ProcessedTranscription {
     pub post_process_prompt: Option<String>,
 }
 
+struct PreparedTranscription {
+    final_text: String,
+}
+
+fn selected_post_process_prompt(settings: &AppSettings) -> Option<String> {
+    let prompt_id = settings.post_process_selected_prompt_id.as_ref()?;
+    let prompt = settings
+        .post_process_prompts
+        .iter()
+        .find(|prompt| &prompt.id == prompt_id)?
+        .prompt
+        .clone();
+    (!prompt.trim().is_empty()).then_some(prompt)
+}
+
+/// A cleanup request must be fully configured before it becomes visible as
+/// pending. This prevents the insert hotkey from ever treating a stale result as
+/// the outcome of an unconfigured dictation.
+fn can_start_eager_cleanup(settings: &AppSettings) -> bool {
+    settings.post_process_enabled
+        && settings
+            .active_post_process_provider()
+            .and_then(|provider| settings.post_process_models.get(&provider.id))
+            .is_some_and(|model| !model.trim().is_empty())
+        && selected_post_process_prompt(settings).is_some()
+}
+
+async fn prepare_transcription_output(
+    app: &AppHandle,
+    transcription: &str,
+) -> PreparedTranscription {
+    let settings = get_settings(app);
+    let effective_language = resolve_effective_language(app, &settings);
+    let final_text = maybe_convert_chinese_variant(&effective_language, transcription)
+        .await
+        .unwrap_or_else(|| transcription.to_string());
+    PreparedTranscription { final_text }
+}
+
+fn show_cleanup_insert_outcome(app: &AppHandle, outcome: InsertLatestOutcome) {
+    match outcome {
+        InsertLatestOutcome::Insert(text) => {
+            let app_for_insert = app.clone();
+            let app_for_error = app.clone();
+            if let Err(error) = app_for_insert.clone().run_on_main_thread(move || {
+                match utils::replace_last_insertion_without_clipboard(&text, &app_for_insert) {
+                    Ok(()) => crate::overlay::show_cleanup_result_overlay(&app_for_insert, &text),
+                    Err(error) => {
+                        error!("Failed to insert AI-cleaned text: {}", error);
+                        crate::overlay::show_cleanup_unavailable_overlay(&app_for_insert);
+                    }
+                }
+            }) {
+                error!("Failed to schedule AI-cleaned text insertion: {}", error);
+                crate::overlay::show_cleanup_unavailable_overlay(&app_for_error);
+            }
+        }
+        InsertLatestOutcome::Pending => crate::overlay::show_cleanup_pending_overlay(app),
+        InsertLatestOutcome::Unavailable => crate::overlay::show_cleanup_unavailable_overlay(app),
+        InsertLatestOutcome::Empty => crate::overlay::show_cleanup_empty_overlay(app),
+    }
+}
+
+fn insert_latest_post_processed(app: &AppHandle) {
+    let coordinator = app.state::<LatestCleanupCoordinator>();
+    show_cleanup_insert_outcome(app, coordinator.request_insert());
+}
+
+fn spawn_eager_cleanup(
+    app: AppHandle,
+    history: Arc<HistoryManager>,
+    settings: AppSettings,
+    transcription: String,
+    history_id: Option<i64>,
+    prompt: Option<String>,
+    generation: u64,
+) {
+    tauri::async_runtime::spawn(async move {
+        let result = post_process_transcription(&settings, &transcription).await;
+        match result.filter(|text| !text.trim().is_empty()) {
+            Some(cleaned_text) => {
+                if let Some(history_id) = history_id {
+                    if let Err(error) =
+                        history.update_post_processing(history_id, cleaned_text.clone(), prompt)
+                    {
+                        error!("Failed to update AI cleanup history entry: {}", error);
+                    }
+                }
+                let latest = app.state::<LatestCleanupCoordinator>();
+                if let Some(completion) = latest.complete(generation, cleaned_text.clone()) {
+                    match completion {
+                        LatestCleanupCompletion::Ready => {
+                            crate::overlay::show_cleanup_result_overlay(&app, &cleaned_text);
+                        }
+                        LatestCleanupCompletion::Insert(text) => {
+                            show_cleanup_insert_outcome(&app, InsertLatestOutcome::Insert(text));
+                        }
+                    }
+                }
+            }
+            None => app.state::<LatestCleanupCoordinator>().fail(generation),
+        }
+    });
+}
+
 /// Resolve the persisted language *intent* into the language the currently-loaded
 /// model will actually use — the same capability-aware coercion the transcription
 /// paths apply (see [`crate::managers::model::effective_language`]). Post-processing
@@ -469,6 +577,12 @@ impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+
+        // A new recording makes every previous cleanup result ineligible for
+        // the copy hotkey immediately, before ASR or the LLM can finish.
+        if !self.post_process {
+            app.state::<LatestCleanupCoordinator>().invalidate();
+        }
 
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
@@ -755,16 +869,33 @@ impl ShortcutAction for TranscribeAction {
                                     show_processing_overlay(&ah);
                                 }
                             }
-                            let Some(processed) = complete_unless_cancelled(
-                                process_transcription_output(&ah, &transcription, post_process),
-                                || rm.was_cancelled_since(cancel_generation),
-                            )
-                            .await
-                            else {
-                                debug!("Transcription operation cancelled during output handling");
-                                utils::hide_recording_overlay(&ah);
-                                change_tray_icon(&ah, TrayIconState::Idle);
-                                return;
+                            // The legacy post-process action remains synchronous
+                            // for CLI/SIGUSR1 compatibility. Ordinary dictation
+                            // prepares and pastes deterministic text immediately,
+                            // then performs AI cleanup in the background.
+                            let processed = if post_process {
+                                let Some(processed) = complete_unless_cancelled(
+                                    process_transcription_output(&ah, &transcription, true),
+                                    || rm.was_cancelled_since(cancel_generation),
+                                )
+                                .await
+                                else {
+                                    debug!(
+                                        "Transcription operation cancelled during output handling"
+                                    );
+                                    utils::hide_recording_overlay(&ah);
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                };
+                                processed
+                            } else {
+                                let prepared =
+                                    prepare_transcription_output(&ah, &transcription).await;
+                                ProcessedTranscription {
+                                    final_text: prepared.final_text,
+                                    post_processed_text: None,
+                                    post_process_prompt: None,
+                                }
                             };
 
                             if rm.was_cancelled_since(cancel_generation) {
@@ -774,20 +905,56 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
+                            let eager_settings = (!post_process)
+                                .then(|| get_settings(&ah))
+                                .filter(can_start_eager_cleanup);
+                            let eager_prompt = eager_settings
+                                .as_ref()
+                                .and_then(selected_post_process_prompt);
+
+                            // Save the original ASR output before any background
+                            // cleanup can complete, then update only its cleanup
+                            // fields on completion.
+                            let mut eager_history_id = None;
                             if wav_saved {
-                                if let Err(err) = hm.save_entry(
+                                match hm.save_entry(
                                     file_name,
                                     transcription,
-                                    post_process,
+                                    post_process || eager_settings.is_some(),
                                     processed.post_processed_text.clone(),
                                     processed.post_process_prompt.clone(),
                                 ) {
-                                    error!("Failed to save history entry: {}", err);
+                                    Ok(entry) => eager_history_id = Some(entry.id),
+                                    Err(err) => error!("Failed to save history entry: {}", err),
                                 }
                             }
 
+                            let eager_cleanup = eager_settings.map(|settings_snapshot| {
+                                let latest = ah.state::<LatestCleanupCoordinator>();
+                                let generation = latest.begin();
+                                (
+                                    settings_snapshot,
+                                    processed.final_text.clone(),
+                                    eager_history_id,
+                                    eager_prompt,
+                                    generation,
+                                )
+                            });
+
                             if processed.final_text.is_empty() {
+                                if let Some((settings, text, history_id, prompt, generation)) =
+                                    eager_cleanup
+                                {
+                                    spawn_eager_cleanup(
+                                        ah.clone(),
+                                        Arc::clone(&hm),
+                                        settings,
+                                        text,
+                                        history_id,
+                                        prompt,
+                                        generation,
+                                    );
+                                }
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             } else {
@@ -795,6 +962,7 @@ impl ShortcutAction for TranscribeAction {
                                 let paste_time = Instant::now();
                                 let final_text = processed.final_text;
                                 let rm_for_paste = Arc::clone(&rm);
+                                let cleanup_history = Arc::clone(&hm);
                                 ah.run_on_main_thread(move || {
                                     if rm_for_paste.was_cancelled_since(cancel_generation) {
                                         debug!("Transcription operation cancelled before paste");
@@ -812,6 +980,19 @@ impl ShortcutAction for TranscribeAction {
                                             error!("Failed to paste transcription: {}", e);
                                             let _ = ah_clone.emit("paste-error", ());
                                         }
+                                    }
+                                    if let Some((settings, text, history_id, prompt, generation)) =
+                                        eager_cleanup
+                                    {
+                                        spawn_eager_cleanup(
+                                            ah_clone.clone(),
+                                            cleanup_history,
+                                            settings,
+                                            text,
+                                            history_id,
+                                            prompt,
+                                            generation,
+                                        );
                                     }
                                     utils::hide_recording_overlay(&ah_clone);
                                     change_tray_icon(&ah_clone, TrayIconState::Idle);
@@ -883,6 +1064,16 @@ impl ShortcutAction for CancelAction {
     }
 }
 
+struct InsertLatestPostProcessedAction;
+
+impl ShortcutAction for InsertLatestPostProcessedAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        insert_latest_post_processed(app);
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {}
+}
+
 // Test Action
 struct TestAction;
 
@@ -918,6 +1109,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     map.insert(
         "transcribe_with_post_process".to_string(),
         Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "insert_latest_post_processed".to_string(),
+        Arc::new(InsertLatestPostProcessedAction) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "cancel".to_string(),

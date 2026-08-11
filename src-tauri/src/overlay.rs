@@ -52,7 +52,7 @@ const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
 
 /// Overlay window size (logical) for a given UI state.
 fn overlay_dimensions(state: &str) -> (f64, f64) {
-    if state == "streaming" {
+    if matches!(state, "streaming" | "cleanup_result") {
         (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
     } else {
         (OVERLAY_WIDTH, OVERLAY_HEIGHT)
@@ -60,6 +60,9 @@ fn overlay_dimensions(state: &str) -> (f64, f64) {
 }
 
 static LAST_MIC_LEVEL_EMIT: AtomicU64 = AtomicU64::new(0);
+// Every visible state supersedes the previous one. Terminal cleanup feedback
+// captures this token so its auto-hide can never close a newer recording.
+static OVERLAY_STATE_GENERATION: AtomicU64 = AtomicU64::new(0);
 const EMIT_THROTTLE_MS: u64 = 33; // ~30 FPS
 
 #[cfg(target_os = "macos")]
@@ -467,6 +470,8 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
         return;
     }
 
+    OVERLAY_STATE_GENERATION.fetch_add(1, Ordering::Relaxed);
+
     // The rest queries monitors and the cursor and mutates window geometry. On
     // Linux the monitor/cursor lookups hit GDK/Xlib on the process's shared X11
     // connection, which is only safe from the GTK main thread — running them on
@@ -491,7 +496,10 @@ fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
         #[cfg(not(target_os = "windows"))]
         let _ = overlay_window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
         #[cfg(target_os = "windows")]
-        WINDOWS_OVERLAY_IS_STREAMING.store(state == "streaming", Ordering::Relaxed);
+        WINDOWS_OVERLAY_IS_STREAMING.store(
+            matches!(state, "streaming" | "cleanup_result"),
+            Ordering::Relaxed,
+        );
         let size_elapsed = size_started.elapsed();
 
         let pos_started = std::time::Instant::now();
@@ -560,6 +568,54 @@ pub fn show_transcribing_overlay(app_handle: &AppHandle) {
 /// Shows the processing overlay window
 pub fn show_processing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "processing");
+}
+
+/// Compact, non-focus-stealing feedback for the explicit cleanup-insert hotkey.
+pub fn show_cleanup_pending_overlay(app_handle: &AppHandle) {
+    show_overlay_state(app_handle, "cleanup_pending");
+}
+
+pub fn show_cleanup_unavailable_overlay(app_handle: &AppHandle) {
+    show_overlay_state(app_handle, "cleanup_unavailable");
+    hide_cleanup_feedback_after_delay(app_handle);
+}
+
+/// Shows the completed AI cleanup in the same large card used for live text.
+/// It is useful even when ASR itself is non-streaming, so this does not depend
+/// on a streaming-capable transcription model.
+pub fn show_cleanup_result_overlay(app_handle: &AppHandle, text: &str) {
+    show_overlay_state(app_handle, "cleanup_result");
+    if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
+        let _ = overlay_window.emit("cleanup-text", text);
+    }
+    hide_cleanup_result_after_delay(app_handle);
+}
+
+pub fn show_cleanup_empty_overlay(app_handle: &AppHandle) {
+    show_overlay_state(app_handle, "cleanup_empty");
+    hide_cleanup_feedback_after_delay(app_handle);
+}
+
+fn hide_cleanup_feedback_after_delay(app_handle: &AppHandle) {
+    let app_handle = app_handle.clone();
+    let generation = OVERLAY_STATE_GENERATION.load(Ordering::Relaxed);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1400));
+        if OVERLAY_STATE_GENERATION.load(Ordering::Relaxed) == generation {
+            hide_recording_overlay(&app_handle);
+        }
+    });
+}
+
+fn hide_cleanup_result_after_delay(app_handle: &AppHandle) {
+    let app_handle = app_handle.clone();
+    let generation = OVERLAY_STATE_GENERATION.load(Ordering::Relaxed);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if OVERLAY_STATE_GENERATION.load(Ordering::Relaxed) == generation {
+            hide_recording_overlay(&app_handle);
+        }
+    });
 }
 
 /// Updates the overlay window position based on current settings

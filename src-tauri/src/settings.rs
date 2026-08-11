@@ -494,7 +494,7 @@ fn default_model() -> String {
     "".to_string()
 }
 
-const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 fn default_settings_schema_version() -> u32 {
     CURRENT_SETTINGS_SCHEMA_VERSION
@@ -839,11 +839,11 @@ pub fn get_default_settings() -> AppSettings {
     let default_post_process_shortcut = "alt+shift+space";
 
     bindings.insert(
-        "transcribe_with_post_process".to_string(),
+        "insert_latest_post_processed".to_string(),
         ShortcutBinding {
-            id: "transcribe_with_post_process".to_string(),
-            name: "Transcribe with Post-Processing".to_string(),
-            description: "Converts your speech into text and applies AI post-processing."
+            id: "insert_latest_post_processed".to_string(),
+            name: "Insert latest AI-cleaned text".to_string(),
+            description: "Inserts the most recent AI-cleaned transcription at the cursor."
                 .to_string(),
             default_binding: default_post_process_shortcut.to_string(),
             current_binding: default_post_process_shortcut.to_string(),
@@ -1106,6 +1106,37 @@ fn apply_settings_migrations(
         }
     }
 
+    // The former post-processing binding selected an upfront, delayed paste.
+    // It now copies only the latest background-cleaned text. Preserve the user's
+    // chosen shortcut while removing the legacy binding from global registration.
+    if stored_schema_version < 3 {
+        if let Some(mut legacy) = settings.bindings.remove("transcribe_with_post_process") {
+            legacy.id = "copy_latest_post_processed".to_string();
+            legacy.name = "Copy latest AI-cleaned text".to_string();
+            legacy.description = "Copies the most recent AI-cleaned transcription.".to_string();
+            settings
+                .bindings
+                .insert("copy_latest_post_processed".to_string(), legacy);
+            updated = true;
+        }
+    }
+
+    // The eager-cleanup result is inserted at the active cursor without
+    // retaining it on the clipboard. Keep each user's chosen hotkey while
+    // replacing the earlier clipboard-copy binding.
+    if stored_schema_version < 4 {
+        if let Some(mut copy_binding) = settings.bindings.remove("copy_latest_post_processed") {
+            copy_binding.id = "insert_latest_post_processed".to_string();
+            copy_binding.name = "Insert latest AI-cleaned text".to_string();
+            copy_binding.description =
+                "Inserts the most recent AI-cleaned transcription at the cursor.".to_string();
+            settings
+                .bindings
+                .insert("insert_latest_post_processed".to_string(), copy_binding);
+            updated = true;
+        }
+    }
+
     if stored_schema_version < CURRENT_SETTINGS_SCHEMA_VERSION as u64
         && settings.settings_schema_version != CURRENT_SETTINGS_SCHEMA_VERSION
     {
@@ -1304,6 +1335,13 @@ mod tests {
 
         assert!(apply_settings_migrations(&mut settings, &stored));
         assert_eq!(settings.recording_mode, RecordingMode::Toggle);
+        assert_eq!(
+            settings.bindings["insert_latest_post_processed"].current_binding,
+            "option+shift+space"
+        );
+        assert!(!settings
+            .bindings
+            .contains_key("transcribe_with_post_process"));
         assert_eq!(
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
@@ -1571,6 +1609,86 @@ mod tests {
 
         assert!(!apply_settings_migrations(&mut settings, &raw));
         assert_eq!(settings.recording_mode, RecordingMode::TapOrHold);
+    }
+
+    #[test]
+    fn legacy_post_process_binding_migrates_once_without_losing_its_hotkey() {
+        let raw = serde_json::json!({
+            "settings_schema_version": 2,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+            "bindings": {
+                "transcribe_with_post_process": {
+                    "id": "transcribe_with_post_process",
+                    "name": "Legacy",
+                    "description": "Legacy",
+                    "default_binding": "option+shift+space",
+                    "current_binding": "ctrl+alt+p"
+                }
+            }
+        });
+        let mut settings = get_default_settings();
+        settings.settings_schema_version = 2;
+        settings.bindings.insert(
+            "transcribe_with_post_process".to_string(),
+            ShortcutBinding {
+                id: "transcribe_with_post_process".to_string(),
+                name: "Legacy".to_string(),
+                description: "Legacy".to_string(),
+                default_binding: "option+shift+space".to_string(),
+                current_binding: "ctrl+alt+p".to_string(),
+            },
+        );
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(
+            settings.bindings["insert_latest_post_processed"].current_binding,
+            "ctrl+alt+p"
+        );
+        assert!(!settings
+            .bindings
+            .contains_key("transcribe_with_post_process"));
+        assert!(!apply_settings_migrations(&mut settings, &raw));
+    }
+
+    #[test]
+    fn copy_binding_migrates_to_insert_without_losing_its_hotkey() {
+        let raw = serde_json::json!({
+            "settings_schema_version": 3,
+            "onboarding_completed": false,
+            "whats_new_last_seen_version": default_whats_new_last_seen_version(),
+            "overlay_style": "live",
+            "bindings": {
+                "copy_latest_post_processed": {
+                    "id": "copy_latest_post_processed",
+                    "name": "Copy latest AI-cleaned text",
+                    "description": "Copies the latest completed AI-cleaned transcription.",
+                    "default_binding": "option+shift+space",
+                    "current_binding": "ctrl+alt+p"
+                }
+            }
+        });
+        let mut settings = get_default_settings();
+        settings.settings_schema_version = 3;
+        settings.bindings.insert(
+            "copy_latest_post_processed".to_string(),
+            ShortcutBinding {
+                id: "copy_latest_post_processed".to_string(),
+                name: "Copy latest AI-cleaned text".to_string(),
+                description: "Copies the latest completed AI-cleaned transcription.".to_string(),
+                default_binding: "option+shift+space".to_string(),
+                current_binding: "ctrl+alt+p".to_string(),
+            },
+        );
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(
+            settings.bindings["insert_latest_post_processed"].current_binding,
+            "ctrl+alt+p"
+        );
+        assert!(!settings.bindings.contains_key("copy_latest_post_processed"));
+        assert!(!apply_settings_migrations(&mut settings, &raw));
     }
 
     #[test]

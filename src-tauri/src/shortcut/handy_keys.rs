@@ -433,8 +433,8 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         if id == "cancel" {
             continue;
         }
-        // Skip post-processing shortcut when the feature is disabled
-        if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
+        // Skip the cleanup-copy shortcut when the feature is disabled.
+        if id == "insert_latest_post_processed" && !user_settings.post_process_enabled {
             continue;
         }
 
