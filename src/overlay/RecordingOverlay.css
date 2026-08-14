@@ -19,6 +19,10 @@
   --s-faint: #9a9a9a;
   --s-border: color-mix(in srgb, var(--color-mid-gray) 22%, transparent);
   --s-hair: color-mix(in srgb, var(--color-mid-gray) 12%, transparent);
+  --s-diff-added: #8f1230;
+  --s-diff-added-bg: #ffd8e1;
+  --s-diff-removed: #9f1239;
+  --s-diff-removed-bg: #ffe1e7;
 
   /* Card geometry — single source of truth for the visible overlay sizes. The
      native overlay window (overlay.rs) is sized from these: it must be at least
@@ -48,6 +52,10 @@
     /* Hairlines flip to the near-white text token for contrast on dark. */
     --s-border: color-mix(in srgb, var(--color-text) 12%, transparent);
     --s-hair: color-mix(in srgb, var(--color-text) 8%, transparent);
+    --s-diff-added: #ffb5c4;
+    --s-diff-added-bg: #6b1930;
+    --s-diff-removed: #ff9aaa;
+    --s-diff-removed-bg: #5d1725;
   }
 }
 
@@ -295,18 +303,23 @@
 }
 .cleanup-diff mark {
   color: inherit;
-  background: transparent;
-  border-radius: 3px;
+  border-radius: 4px;
+  padding: 1px 2px;
+  font-weight: 750;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 .cleanup-diff .diff-removed {
-  color: var(--s-faint);
+  color: var(--s-diff-removed);
+  background: var(--s-diff-removed-bg);
   text-decoration: line-through;
-  text-decoration-thickness: 1px;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 2px;
 }
 .cleanup-diff .diff-added {
-  color: var(--color-text);
-  background: var(--s-accent-soft);
-  box-shadow: 0 0 0 1px var(--s-accent-soft);
+  color: var(--s-diff-added);
+  background: var(--s-diff-added-bg);
+  box-shadow: 0 0 0 1px var(--s-diff-added-bg);
 }
 @keyframes sdot-pulse {
   0% {

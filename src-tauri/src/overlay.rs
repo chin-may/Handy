@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct CleanupTextEvent<'a> {
     original: &'a str,
     cleaned: &'a str,

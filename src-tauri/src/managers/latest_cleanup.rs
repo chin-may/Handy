@@ -4,6 +4,11 @@
 //! the current dictation's result. A generation makes late completions harmless.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// The insert shortcut replaces text in whichever app currently has focus, so a
+/// cleanup result must not remain actionable indefinitely after dictation.
+const CLEANUP_INSERT_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LatestCleanupState {
@@ -17,6 +22,10 @@ enum LatestCleanupState {
         generation: u64,
         original: String,
         text: String,
+        expires_at: Instant,
+    },
+    Expired {
+        generation: u64,
     },
     Failed {
         generation: u64,
@@ -28,6 +37,7 @@ pub enum InsertLatestOutcome {
     Insert { original: String, text: String },
     Pending,
     Unavailable,
+    Expired,
     Empty,
 }
 
@@ -103,6 +113,7 @@ impl LatestCleanupCoordinator {
             generation,
             original: original.clone(),
             text,
+            expires_at: Instant::now() + CLEANUP_INSERT_TTL,
         };
         Some(completion)
     }
@@ -120,10 +131,21 @@ impl LatestCleanupCoordinator {
         match &mut *state {
             LatestCleanupState::Empty => InsertLatestOutcome::Empty,
             LatestCleanupState::Failed { .. } => InsertLatestOutcome::Unavailable,
-            LatestCleanupState::Ready { original, text, .. } => InsertLatestOutcome::Insert {
+            LatestCleanupState::Ready {
+                generation: _,
+                original,
+                text,
+                expires_at,
+            } if Instant::now() < *expires_at => InsertLatestOutcome::Insert {
                 original: original.clone(),
                 text: text.clone(),
             },
+            LatestCleanupState::Ready { generation, .. } => {
+                let generation = *generation;
+                *state = LatestCleanupState::Expired { generation };
+                InsertLatestOutcome::Expired
+            }
+            LatestCleanupState::Expired { .. } => InsertLatestOutcome::Expired,
             LatestCleanupState::Pending {
                 insert_when_ready, ..
             } => {
@@ -142,7 +164,10 @@ impl Default for LatestCleanupCoordinator {
 
 #[cfg(test)]
 mod tests {
-    use super::{InsertLatestOutcome, LatestCleanupCompletion, LatestCleanupCoordinator};
+    use super::{
+        InsertLatestOutcome, LatestCleanupCompletion, LatestCleanupCoordinator, LatestCleanupState,
+    };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn ready_result_is_inserted() {
@@ -196,6 +221,25 @@ mod tests {
             coordinator.request_insert(),
             InsertLatestOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn expired_result_can_no_longer_be_inserted() {
+        let coordinator = LatestCleanupCoordinator::new();
+        let generation = coordinator.begin("Original".into());
+        coordinator.complete(generation, "Cleaned".into());
+        *coordinator
+            .state
+            .lock()
+            .expect("latest cleanup state poisoned") = LatestCleanupState::Ready {
+            generation,
+            original: "Original".into(),
+            text: "Cleaned".into(),
+            expires_at: Instant::now() - Duration::from_secs(1),
+        };
+
+        assert_eq!(coordinator.request_insert(), InsertLatestOutcome::Expired);
+        assert_eq!(coordinator.request_insert(), InsertLatestOutcome::Expired);
     }
 
     #[test]

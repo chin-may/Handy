@@ -464,6 +464,7 @@ fn show_cleanup_insert_outcome(app: &AppHandle, outcome: InsertLatestOutcome) {
         }
         InsertLatestOutcome::Pending => crate::overlay::show_cleanup_pending_overlay(app),
         InsertLatestOutcome::Unavailable => crate::overlay::show_cleanup_unavailable_overlay(app),
+        InsertLatestOutcome::Expired => crate::overlay::show_cleanup_empty_overlay(app),
         InsertLatestOutcome::Empty => crate::overlay::show_cleanup_empty_overlay(app),
     }
 }
