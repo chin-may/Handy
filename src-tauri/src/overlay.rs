@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
+#[derive(serde::Serialize)]
+struct CleanupTextEvent<'a> {
+    original: &'a str,
+    cleaned: &'a str,
+}
+
 #[cfg(not(target_os = "macos"))]
 use log::debug;
 
@@ -580,15 +586,29 @@ pub fn show_cleanup_unavailable_overlay(app_handle: &AppHandle) {
     hide_cleanup_feedback_after_delay(app_handle);
 }
 
-/// Shows the completed AI cleanup in the same large card used for live text.
-/// It is useful even when ASR itself is non-streaming, so this does not depend
-/// on a streaming-capable transcription model.
-pub fn show_cleanup_result_overlay(app_handle: &AppHandle, text: &str) {
-    show_overlay_state(app_handle, "cleanup_result");
+/// Shows a highlighted cleanup diff, or a compact completion check when the AI
+/// returned the original text unchanged.
+pub fn show_cleanup_result_overlay(app_handle: &AppHandle, original: &str, cleaned: &str) {
+    let unchanged = original == cleaned;
+    show_overlay_state(
+        app_handle,
+        if unchanged {
+            "cleanup_unchanged"
+        } else {
+            "cleanup_result"
+        },
+    );
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
-        let _ = overlay_window.emit("cleanup-text", text);
+        let _ = overlay_window.emit(
+            "cleanup-text",
+            CleanupTextEvent { original, cleaned },
+        );
     }
-    hide_cleanup_result_after_delay(app_handle);
+    if unchanged {
+        hide_cleanup_feedback_after_delay(app_handle);
+    } else {
+        hide_cleanup_result_after_delay(app_handle);
+    }
 }
 
 pub fn show_cleanup_empty_overlay(app_handle: &AppHandle) {

@@ -10,10 +10,12 @@ enum LatestCleanupState {
     Empty,
     Pending {
         generation: u64,
+        original: String,
         insert_when_ready: bool,
     },
     Ready {
         generation: u64,
+        original: String,
         text: String,
     },
     Failed {
@@ -23,7 +25,7 @@ enum LatestCleanupState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsertLatestOutcome {
-    Insert(String),
+    Insert { original: String, text: String },
     Pending,
     Unavailable,
     Empty,
@@ -34,8 +36,8 @@ pub enum InsertLatestOutcome {
 /// target for a newer dictation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LatestCleanupCompletion {
-    Ready,
-    Insert(String),
+    Ready { original: String, text: String },
+    Insert { original: String, text: String },
 }
 
 /// Coordinates one explicit insertion operation for the latest cleanup result.
@@ -57,7 +59,7 @@ impl LatestCleanupCoordinator {
         *self.state.lock().expect("latest cleanup state poisoned") = LatestCleanupState::Empty;
     }
 
-    pub fn begin(&self) -> u64 {
+    pub fn begin(&self, original: String) -> u64 {
         let mut next = self
             .next_generation
             .lock()
@@ -66,6 +68,7 @@ impl LatestCleanupCoordinator {
         let generation = *next;
         *self.state.lock().expect("latest cleanup state poisoned") = LatestCleanupState::Pending {
             generation,
+            original,
             insert_when_ready: false,
         };
         generation
@@ -76,6 +79,7 @@ impl LatestCleanupCoordinator {
         let mut state = self.state.lock().expect("latest cleanup state poisoned");
         let LatestCleanupState::Pending {
             generation: pending_generation,
+            original,
             insert_when_ready,
         } = &*state
         else {
@@ -85,11 +89,21 @@ impl LatestCleanupCoordinator {
             return None;
         }
         let completion = if *insert_when_ready {
-            LatestCleanupCompletion::Insert(text.clone())
+            LatestCleanupCompletion::Insert {
+                original: original.clone(),
+                text: text.clone(),
+            }
         } else {
-            LatestCleanupCompletion::Ready
+            LatestCleanupCompletion::Ready {
+                original: original.clone(),
+                text: text.clone(),
+            }
         };
-        *state = LatestCleanupState::Ready { generation, text };
+        *state = LatestCleanupState::Ready {
+            generation,
+            original: original.clone(),
+            text,
+        };
         Some(completion)
     }
 
@@ -106,7 +120,10 @@ impl LatestCleanupCoordinator {
         match &mut *state {
             LatestCleanupState::Empty => InsertLatestOutcome::Empty,
             LatestCleanupState::Failed { .. } => InsertLatestOutcome::Unavailable,
-            LatestCleanupState::Ready { text, .. } => InsertLatestOutcome::Insert(text.clone()),
+            LatestCleanupState::Ready { original, text, .. } => InsertLatestOutcome::Insert {
+                original: original.clone(),
+                text: text.clone(),
+            },
             LatestCleanupState::Pending {
                 insert_when_ready, ..
             } => {
@@ -130,30 +147,42 @@ mod tests {
     #[test]
     fn ready_result_is_inserted() {
         let coordinator = LatestCleanupCoordinator::new();
-        let generation = coordinator.begin();
+        let generation = coordinator.begin("Original".into());
         assert_eq!(
             coordinator.complete(generation, "Cleaned".into()),
-            Some(LatestCleanupCompletion::Ready)
+            Some(LatestCleanupCompletion::Ready {
+                original: "Original".into(),
+                text: "Cleaned".into(),
+            })
         );
         assert_eq!(
             coordinator.request_insert(),
-            InsertLatestOutcome::Insert("Cleaned".into())
+            InsertLatestOutcome::Insert {
+                original: "Original".into(),
+                text: "Cleaned".into(),
+            }
         );
     }
 
     #[test]
     fn pending_insert_is_queued_once_and_completed_once() {
         let coordinator = LatestCleanupCoordinator::new();
-        let generation = coordinator.begin();
+        let generation = coordinator.begin("Original".into());
         assert_eq!(coordinator.request_insert(), InsertLatestOutcome::Pending);
         assert_eq!(coordinator.request_insert(), InsertLatestOutcome::Pending);
         assert_eq!(
             coordinator.complete(generation, "Cleaned".into()),
-            Some(LatestCleanupCompletion::Insert("Cleaned".into()))
+            Some(LatestCleanupCompletion::Insert {
+                original: "Original".into(),
+                text: "Cleaned".into(),
+            })
         );
         assert_eq!(
             coordinator.request_insert(),
-            InsertLatestOutcome::Insert("Cleaned".into())
+            InsertLatestOutcome::Insert {
+                original: "Original".into(),
+                text: "Cleaned".into(),
+            }
         );
     }
 
@@ -161,7 +190,7 @@ mod tests {
     fn failure_and_empty_never_supply_text() {
         let coordinator = LatestCleanupCoordinator::new();
         assert_eq!(coordinator.request_insert(), InsertLatestOutcome::Empty);
-        let generation = coordinator.begin();
+        let generation = coordinator.begin("Original".into());
         coordinator.fail(generation);
         assert_eq!(
             coordinator.request_insert(),
@@ -172,17 +201,23 @@ mod tests {
     #[test]
     fn newer_dictation_rejects_a_late_completion() {
         let coordinator = LatestCleanupCoordinator::new();
-        let first = coordinator.begin();
+        let first = coordinator.begin("Old original".into());
         coordinator.invalidate();
-        let second = coordinator.begin();
+        let second = coordinator.begin("New original".into());
         assert_eq!(coordinator.complete(first, "Old".into()), None);
         assert_eq!(
             coordinator.complete(second, "New".into()),
-            Some(LatestCleanupCompletion::Ready)
+            Some(LatestCleanupCompletion::Ready {
+                original: "New original".into(),
+                text: "New".into(),
+            })
         );
         assert_eq!(
             coordinator.request_insert(),
-            InsertLatestOutcome::Insert("New".into())
+            InsertLatestOutcome::Insert {
+                original: "New original".into(),
+                text: "New".into(),
+            }
         );
     }
 }

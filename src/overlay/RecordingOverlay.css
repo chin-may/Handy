@@ -280,6 +280,34 @@
 .sdone::before {
   content: "✓";
 }
+.completion-check {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--s-surface);
+  border: 1px solid var(--s-border);
+  animation: scard-pop 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.completion-check .sdone {
+  font-size: 11px;
+}
+.cleanup-diff mark {
+  color: inherit;
+  background: transparent;
+  border-radius: 3px;
+}
+.cleanup-diff .diff-removed {
+  color: var(--s-faint);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.cleanup-diff .diff-added {
+  color: var(--color-text);
+  background: var(--s-accent-soft);
+  box-shadow: 0 0 0 1px var(--s-accent-soft);
+}
 @keyframes sdot-pulse {
   0% {
     box-shadow: 0 0 0 0 var(--s-accent-soft);

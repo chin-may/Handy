@@ -442,12 +442,16 @@ async fn prepare_transcription_output(
 
 fn show_cleanup_insert_outcome(app: &AppHandle, outcome: InsertLatestOutcome) {
     match outcome {
-        InsertLatestOutcome::Insert(text) => {
+        InsertLatestOutcome::Insert { original, text } => {
             let app_for_insert = app.clone();
             let app_for_error = app.clone();
             if let Err(error) = app_for_insert.clone().run_on_main_thread(move || {
                 match utils::replace_last_insertion_without_clipboard(&text, &app_for_insert) {
-                    Ok(()) => crate::overlay::show_cleanup_result_overlay(&app_for_insert, &text),
+                    Ok(()) => crate::overlay::show_cleanup_result_overlay(
+                        &app_for_insert,
+                        &original,
+                        &text,
+                    ),
                     Err(error) => {
                         error!("Failed to insert AI-cleaned text: {}", error);
                         crate::overlay::show_cleanup_unavailable_overlay(&app_for_insert);
@@ -492,11 +496,14 @@ fn spawn_eager_cleanup(
                 let latest = app.state::<LatestCleanupCoordinator>();
                 if let Some(completion) = latest.complete(generation, cleaned_text.clone()) {
                     match completion {
-                        LatestCleanupCompletion::Ready => {
-                            crate::overlay::show_cleanup_result_overlay(&app, &cleaned_text);
+                        LatestCleanupCompletion::Ready { original, text } => {
+                            crate::overlay::show_cleanup_result_overlay(&app, &original, &text);
                         }
-                        LatestCleanupCompletion::Insert(text) => {
-                            show_cleanup_insert_outcome(&app, InsertLatestOutcome::Insert(text));
+                        LatestCleanupCompletion::Insert { original, text } => {
+                            show_cleanup_insert_outcome(
+                                &app,
+                                InsertLatestOutcome::Insert { original, text },
+                            );
                         }
                     }
                 }
@@ -931,7 +938,7 @@ impl ShortcutAction for TranscribeAction {
 
                             let eager_cleanup = eager_settings.map(|settings_snapshot| {
                                 let latest = ah.state::<LatestCleanupCoordinator>();
-                                let generation = latest.begin();
+                                let generation = latest.begin(processed.final_text.clone());
                                 (
                                     settings_snapshot,
                                     processed.final_text.clone(),

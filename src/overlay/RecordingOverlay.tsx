@@ -20,7 +20,46 @@ type OverlayState =
   | "processing"
   | "cleanup_pending"
   | "cleanup_unavailable"
-  | "cleanup_empty";
+  | "cleanup_empty"
+  | "cleanup_unchanged";
+
+type CleanupTextEvent = {
+  original: string;
+  cleaned: string;
+};
+
+type DiffPart = { text: string; kind: "same" | "removed" | "added" };
+
+// Preserve whitespace as tokens so the rendered diff exactly represents what the
+// editor changed while still highlighting at word/punctuation boundaries.
+const cleanupDiff = (original: string, cleaned: string): DiffPart[] => {
+  const before = original.match(/\s+|\S+/g) ?? [];
+  const after = cleaned.match(/\s+|\S+/g) ?? [];
+  let prefix = 0;
+  while (
+    prefix < before.length &&
+    prefix < after.length &&
+    before[prefix] === after[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix &&
+    suffix < after.length - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  const parts: DiffPart[] = [
+    { text: before.slice(0, prefix).join(""), kind: "same" },
+    { text: before.slice(prefix, before.length - suffix).join(""), kind: "removed" },
+    { text: after.slice(prefix, after.length - suffix).join(""), kind: "added" },
+    { text: after.slice(after.length - suffix).join(""), kind: "same" },
+  ];
+  return parts.filter((part) => part.text.length > 0);
+};
 
 // Number of reactive bars in the waveform (the simple, smoothed style shared by
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
@@ -35,6 +74,7 @@ const RecordingOverlay: React.FC = () => {
     committed: "",
     tentative: "",
   });
+  const [cleanupText, setCleanupText] = useState<CleanupTextEvent | null>(null);
   const [phase, setPhase] = useState<StreamPhase>("listening");
   const [workKind, setWorkKind] = useState<StreamWorkKind>("transcribing");
   const [elapsed, setElapsed] = useState(0);
@@ -115,10 +155,10 @@ const RecordingOverlay: React.FC = () => {
         if (payload.kind) setWorkKind(payload.kind);
       });
 
-      const unlistenCleanupText = await listen<string>(
+      const unlistenCleanupText = await listen<CleanupTextEvent>(
         "cleanup-text",
         (event) => {
-          setStreamText({ committed: event.payload, tentative: "" });
+          setCleanupText(event.payload);
         },
       );
 
@@ -238,11 +278,27 @@ const RecordingOverlay: React.FC = () => {
     </div>
   );
 
+  const completionCheck = (
+    <div className="completion-check" aria-label={t("overlay.ai_cleaned")}>
+      <span className="sdone" aria-hidden="true" />
+    </div>
+  );
+
   // ---- Live overlay: a pill that sculpts open into a panel ----
+  if (state === "cleanup_unchanged") {
+    return (
+      <div dir={direction} className={`ov-stage ${position} ov-fade show`}>
+        {completionCheck}
+      </div>
+    );
+  }
+
   if (state === "streaming" || state === "cleanup_result") {
-    const hasText =
-      streamText.committed.length > 0 || streamText.tentative.length > 0;
     const isCleanupResult = state === "cleanup_result";
+    const hasText =
+      streamText.committed.length > 0 ||
+      streamText.tentative.length > 0 ||
+      (isCleanupResult && cleanupText !== null);
     const working = !isCleanupResult && phase === "working";
     // Keep the panel open whenever there's text — even while finalizing — so the
     // transcript stays put under a working spinner instead of collapsing and
@@ -266,15 +322,30 @@ const RecordingOverlay: React.FC = () => {
                 ref={capRef}
                 onScroll={handleStreamScroll}
               >
-                <p>
-                  <span className="committed">
-                    {streamText.committed ? streamText.committed + " " : ""}
-                  </span>
-                  <span className="tentative">{streamText.tentative}</span>
-                  {/* Drop the blinking caret once finalizing — it's no longer
-                      capturing, and a static spinner conveys the work. */}
-                  {!working && !isCleanupResult && <span className="scaret" />}
-                </p>
+                {isCleanupResult && cleanupText ? (
+                  <p className="cleanup-diff">
+                    {cleanupDiff(cleanupText.original, cleanupText.cleaned).map(
+                      (part, index) =>
+                        part.kind === "same" ? (
+                          <React.Fragment key={index}>{part.text}</React.Fragment>
+                        ) : (
+                          <mark key={index} className={`diff-${part.kind}`}>
+                            {part.text}
+                          </mark>
+                        ),
+                    )}
+                  </p>
+                ) : (
+                  <p>
+                    <span className="committed">
+                      {streamText.committed ? streamText.committed + " " : ""}
+                    </span>
+                    <span className="tentative">{streamText.tentative}</span>
+                    {/* Drop the blinking caret once finalizing — it's no longer
+                        capturing, and a static spinner conveys the work. */}
+                    {!working && !isCleanupResult && <span className="scaret" />}
+                  </p>
+                )}
               </div>
             </div>
           </div>
